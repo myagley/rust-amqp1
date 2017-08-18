@@ -1,4 +1,8 @@
+mod open;
+
 use bytes::Bytes;
+
+pub use self::open::{Open, OpenBuilder};
 
 /// Length in bytes of the fixed frame header
 pub const HEADER_LEN: usize = 8;
@@ -36,4 +40,9 @@ impl AmqpFrame {
     pub fn body(&self) -> &Bytes {
         &self.body
     }
+}
+
+/// Represents a performative of an AMQP Frame.
+pub enum Performative {
+    Open(Open),
 }

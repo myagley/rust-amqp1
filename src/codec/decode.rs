@@ -196,6 +196,99 @@ mod tests {
 
     const LOREM: &str = include_str!("lorem.txt");
 
+    macro_rules! decode_tests {
+        ($($name:ident: $kind:ident, $test:expr, $expected:expr,)*) => {
+        $(
+            #[test]
+            fn $name() {
+                let b1 = &mut BytesMut::with_capacity(0);
+                ($test).encode(b1);
+                assert_eq!(Ok($expected), $kind::decode(b1).to_full_result());
+            }
+        )*
+        }
+    }
+
+    decode_tests! {
+        ubyte: u8, 255_u8, 255_u8,
+        ushort: u16, 350_u16, 350_u16,
+
+        uint_zero: u32, 0_u32, 0_u32,
+        uint_small: u32, 128_u32, 128_u32,
+        uint_big: u32, 2147483647_u32, 2147483647_u32,
+
+        ulong_zero: u64, 0_u64, 0_u64,
+        ulong_small: u64, 128_u64, 128_u64,
+        uulong_big: u64, 2147483649_u64, 2147483649_u64,
+
+        byte: i8, -128_i8, -128_i8,
+        short: i16, -255_i16, -255_i16,
+
+        int_zero: i32, 0_i32, 0_i32,
+        int_small: i32, -50000_i32, -50000_i32,
+        int_neg: i32, -128_i32, -128_i32,
+
+        long_zero: i64, 0_i64, 0_i64,
+        long_big: i64, -2147483647_i64, -2147483647_i64,
+        long_small: i64, -128_i64, -128_i64,
+
+        float: f32, 1.234_f32, 1.234_f32,
+        double: f64, 1.234_f64, 1.234_f64,
+
+        test_char: char, '💯', '💯',
+
+        uuid: Uuid, Uuid::from_bytes(&[4, 54, 67, 12, 43, 2, 98, 76, 32, 50, 87, 5, 1, 33, 43, 87]).expect("parse error"),
+            Uuid::parse_str("0436430c2b02624c2032570501212b57").expect("parse error"),
+
+        binary_short: Bytes, Bytes::from(&[4u8, 5u8][..]), Bytes::from(&[4u8, 5u8][..]),
+        binary_long: Bytes, Bytes::from(&[4u8; 500][..]), Bytes::from(&[4u8; 500][..]),
+
+        string_short: ByteStr, ByteStr::from("Hello there"), ByteStr::from("Hello there"),
+        string_long: ByteStr, ByteStr::from(LOREM), ByteStr::from(LOREM),
+
+        symbol_short: Symbol, Symbol::from("Hello there"), Symbol::from("Hello there"),
+        symbol_long: Symbol, Symbol::from(LOREM), Symbol::from(LOREM),
+
+        variant_ubyte: Variant, Variant::Ubyte(255_u8), Variant::Ubyte(255_u8),
+        variant_ushort: Variant, Variant::Ushort(350_u16), Variant::Ushort(350_u16),
+
+        variant_uint_zero: Variant, Variant::Uint(0_u32), Variant::Uint(0_u32),
+        variant_uint_small: Variant, Variant::Uint(128_u32), Variant::Uint(128_u32),
+        variant_uint_big: Variant, Variant::Uint(2147483647_u32), Variant::Uint(2147483647_u32),
+
+        variant_ulong_zero: Variant, Variant::Ulong(0_u64), Variant::Ulong(0_u64),
+        variant_ulong_small: Variant, Variant::Ulong(128_u64), Variant::Ulong(128_u64),
+        variant_ulong_big: Variant, Variant::Ulong(2147483649_u64), Variant::Ulong(2147483649_u64),
+
+        variant_byte: Variant, Variant::Byte(-128_i8), Variant::Byte(-128_i8),
+        variant_short: Variant, Variant::Short(-255_i16), Variant::Short(-255_i16),
+
+        variant_int_zero: Variant, Variant::Int(0_i32), Variant::Int(0_i32),
+        variant_int_small: Variant, Variant::Int(-50000_i32), Variant::Int(-50000_i32),
+        variant_int_neg: Variant, Variant::Int(-128_i32), Variant::Int(-128_i32),
+
+        variant_long_zero: Variant, Variant::Long(0_i64), Variant::Long(0_i64),
+        variant_long_big: Variant, Variant::Long(-2147483647_i64), Variant::Long(-2147483647_i64),
+        variant_long_small: Variant, Variant::Long(-128_i64), Variant::Long(-128_i64),
+
+        variant_float: Variant, Variant::Float(1.234_f32), Variant::Float(1.234_f32),
+        variant_double: Variant, Variant::Double(1.234_f64), Variant::Double(1.234_f64),
+
+        variant_char: Variant, Variant::Char('💯'), Variant::Char('💯'),
+
+        variant_uuid: Variant, Variant::Uuid(Uuid::from_bytes(&[4, 54, 67, 12, 43, 2, 98, 76, 32, 50, 87, 5, 1, 33, 43, 87]).expect("parse error")),
+            Variant::Uuid(Uuid::parse_str("0436430c2b02624c2032570501212b57").expect("parse error")),
+
+        variant_binary_short: Variant, Variant::Binary(Bytes::from(&[4u8, 5u8][..])), Variant::Binary(Bytes::from(&[4u8, 5u8][..])),
+        variant_binary_long: Variant, Variant::Binary(Bytes::from(&[4u8; 500][..])), Variant::Binary(Bytes::from(&[4u8; 500][..])),
+
+        variant_string_short: Variant, Variant::String(ByteStr::from("Hello there")), Variant::String(ByteStr::from("Hello there")),
+        variant_string_long: Variant, Variant::String(ByteStr::from(LOREM)), Variant::String(ByteStr::from(LOREM)),
+
+        variant_symbol_short: Variant, Variant::Symbol(Symbol::from("Hello there")), Variant::Symbol(Symbol::from("Hello there")),
+        variant_symbol_long: Variant, Variant::Symbol(Symbol::from(LOREM)), Variant::Symbol(Symbol::from(LOREM)),
+   }
+
     #[test]
     fn test_null() {
         let mut b = BytesMut::with_capacity(0);
@@ -228,115 +321,6 @@ mod tests {
         assert_eq!(Ok(false), bool::decode(b2).to_full_result());
     }
 
-    #[test]
-    fn test_ubyte() {
-        let b1 = &mut BytesMut::with_capacity(0);
-        (255 as u8).encode(b1);
-        assert_eq!(Ok(255 as u8), u8::decode(b1).to_full_result());
-    }
-
-    #[test]
-    fn test_ushort() {
-        let b1 = &mut BytesMut::with_capacity(0);
-        (350 as u16).encode(b1);
-        assert_eq!(Ok(350 as u16), u16::decode(b1).to_full_result());
-    }
-
-    #[test]
-    fn test_uint() {
-        let b1 = &mut BytesMut::with_capacity(0);
-        (0 as u32).encode(b1);
-        assert_eq!(Ok(0 as u32), u32::decode(b1).to_full_result());
-
-        let b2 = &mut BytesMut::with_capacity(0);
-        (128 as u32).encode(b2);
-        assert_eq!(Ok(128 as u32), u32::decode(b2).to_full_result());
-
-        let b3 = &mut BytesMut::with_capacity(0);
-        (2147483647 as u32).encode(b3);
-        assert_eq!(Ok(2147483647 as u32), u32::decode(b3).to_full_result());
-    }
-
-    #[test]
-    fn test_ulong() {
-        let b1 = &mut BytesMut::with_capacity(0);
-        (0 as u64).encode(b1);
-        assert_eq!(Ok(0 as u64), u64::decode(b1).to_full_result());
-
-        let b2 = &mut BytesMut::with_capacity(0);
-        (128 as u64).encode(b2);
-        assert_eq!(Ok(128 as u64), u64::decode(b2).to_full_result());
-
-        let b3 = &mut BytesMut::with_capacity(0);
-        (2147483649 as u64).encode(b3);
-        assert_eq!(Ok(2147483649 as u64), u64::decode(b3).to_full_result());
-    }
-
-    #[test]
-    fn test_byte() {
-        let b1 = &mut BytesMut::with_capacity(0);
-        (-128 as i8).encode(b1);
-        assert_eq!(Ok(-128 as i8), i8::decode(b1).to_full_result());
-    }
-
-    #[test]
-    fn test_short() {
-        let b1 = &mut BytesMut::with_capacity(0);
-        (-255 as i16).encode(b1);
-        assert_eq!(Ok(-255 as i16), i16::decode(b1).to_full_result());
-    }
-
-    #[test]
-    fn test_int() {
-        let b1 = &mut BytesMut::with_capacity(0);
-        0.encode(b1);
-        assert_eq!(Ok(0), i32::decode(b1).to_full_result());
-
-        let b2 = &mut BytesMut::with_capacity(0);
-        (-50000).encode(b2);
-        assert_eq!(Ok(-50000), i32::decode(b2).to_full_result());
-
-        let b3 = &mut BytesMut::with_capacity(0);
-        (-128).encode(b3);
-        assert_eq!(Ok(-128), i32::decode(b3).to_full_result());
-    }
-
-    #[test]
-    fn test_long() {
-        let b1 = &mut BytesMut::with_capacity(0);
-        (0 as i64).encode(b1);
-        assert_eq!(Ok(0 as i64), i64::decode(b1).to_full_result());
-
-        let b2 = &mut BytesMut::with_capacity(0);
-        (-2147483647 as i64).encode(b2);
-        assert_eq!(Ok(-2147483647 as i64), i64::decode(b2).to_full_result());
-
-        let b3 = &mut BytesMut::with_capacity(0);
-        (-128 as i64).encode(b3);
-        assert_eq!(Ok(-128 as i64), i64::decode(b3).to_full_result());
-    }
-
-    #[test]
-    fn test_float() {
-        let b1 = &mut BytesMut::with_capacity(0);
-        (1.234 as f32).encode(b1);
-        assert_eq!(Ok(1.234 as f32), f32::decode(b1).to_full_result());
-    }
-
-    #[test]
-    fn test_double() {
-        let b1 = &mut BytesMut::with_capacity(0);
-        (1.234 as f64).encode(b1);
-        assert_eq!(Ok(1.234 as f64), f64::decode(b1).to_full_result());
-    }
-
-    #[test]
-    fn test_char() {
-        let b1 = &mut BytesMut::with_capacity(0);
-        '💯'.encode(b1);
-        assert_eq!(Ok('💯'), char::decode(b1).to_full_result());
-    }
-
     /// UTC with a precision of milliseconds. For example, 1311704463521
     /// represents the moment 2011-07-26T18:21:03.521Z.
     #[test]
@@ -357,85 +341,6 @@ mod tests {
 
         let expected = Utc.ymd(1968, 7, 26).and_hms_milli(18, 21, 3, 521);
         assert_eq!(Ok(expected), DateTime::<Utc>::decode(b1).to_full_result());
-    }
-
-    #[test]
-    fn test_uuid() {
-        let b1 = &mut BytesMut::with_capacity(0);
-        let bytes = [4, 54, 67, 12, 43, 2, 98, 76, 32, 50, 87, 5, 1, 33, 43, 87];
-        let u1 = Uuid::from_bytes(&bytes).expect("parse error");
-        u1.encode(b1);
-
-        let expected = Uuid::parse_str("0436430c2b02624c2032570501212b57").expect("parse error");
-        assert_eq!(Ok(expected), Uuid::decode(b1).to_full_result());
-    }
-
-    #[test]
-    fn test_binary_short() {
-        let b1 = &mut BytesMut::with_capacity(0);
-        let bytes = [4u8, 54, 67, 12, 43, 2, 98, 76, 32, 50, 87, 5, 1, 33, 43, 87];
-        Bytes::from(&bytes[..]).encode(b1);
-
-        let expected = [4u8, 54, 67, 12, 43, 2, 98, 76, 32, 50, 87, 5, 1, 33, 43, 87];
-        assert_eq!(
-            Ok(Bytes::from(&expected[..])),
-            Bytes::decode(b1).to_full_result()
-        );
-    }
-
-    #[test]
-    fn test_binary_long() {
-        let b1 = &mut BytesMut::with_capacity(0);
-        let bytes = [4u8; 500];
-        Bytes::from(&bytes[..]).encode(b1);
-
-        let expected = [4u8; 500];
-        assert_eq!(
-            Ok(Bytes::from(&expected[..])),
-            Bytes::decode(b1).to_full_result()
-        );
-    }
-
-    #[test]
-    fn test_string_short() {
-        let b1 = &mut BytesMut::with_capacity(0);
-        ByteStr::from("Hello there").encode(b1);
-
-        assert_eq!(
-            Ok(ByteStr::from("Hello there")),
-            ByteStr::decode(b1).to_full_result()
-        );
-    }
-
-    #[test]
-    fn test_string_long() {
-        let b1 = &mut BytesMut::with_capacity(0);
-        let s1 = ByteStr::from(LOREM);
-        s1.encode(b1);
-
-        let expected = ByteStr::from(LOREM);
-        assert_eq!(Ok(expected), ByteStr::decode(b1).to_full_result());
-    }
-
-    #[test]
-    fn test_symbol_short() {
-        let b1 = &mut BytesMut::with_capacity(0);
-        Symbol::from("Hello there").encode(b1);
-
-        assert_eq!(
-            Ok(Symbol::from("Hello there")),
-            Symbol::decode(b1).to_full_result()
-        );
-    }
-
-    #[test]
-    fn test_symbol_long() {
-        let b1 = &mut BytesMut::with_capacity(0);
-        let s1 = Symbol::from(LOREM);
-        s1.encode(b1);
-
-        let expected = Symbol::from(LOREM);
-        assert_eq!(Ok(expected), Symbol::decode(b1).to_full_result());
     }
 
     #[test]
@@ -482,154 +387,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn variant_ubyte() {
-        let b1 = &mut BytesMut::with_capacity(0);
-        Variant::Ubyte(255).encode(b1);
-        assert_eq!(
-            Ok(Variant::Ubyte(255)),
-            Variant::decode(b1).to_full_result()
-        );
-    }
-
-    #[test]
-    fn variant_ushort() {
-        let b1 = &mut BytesMut::with_capacity(0);
-        Variant::Ushort(350).encode(b1);
-        assert_eq!(
-            Ok(Variant::Ushort(350)),
-            Variant::decode(b1).to_full_result()
-        );
-    }
-
-    #[test]
-    fn variant_uint() {
-        let b1 = &mut BytesMut::with_capacity(0);
-        Variant::Uint(0).encode(b1);
-        assert_eq!(Ok(Variant::Uint(0)), Variant::decode(b1).to_full_result());
-
-        let b2 = &mut BytesMut::with_capacity(0);
-        Variant::Uint(128).encode(b2);
-        assert_eq!(Ok(Variant::Uint(128)), Variant::decode(b2).to_full_result());
-
-        let b3 = &mut BytesMut::with_capacity(0);
-        Variant::Uint(2147483647).encode(b3);
-        assert_eq!(
-            Ok(Variant::Uint(2147483647)),
-            Variant::decode(b3).to_full_result()
-        );
-    }
-
-    #[test]
-    fn variant_ulong() {
-        let b1 = &mut BytesMut::with_capacity(0);
-        Variant::Ulong(0).encode(b1);
-        assert_eq!(Ok(Variant::Ulong(0)), Variant::decode(b1).to_full_result());
-
-        let b2 = &mut BytesMut::with_capacity(0);
-        Variant::Ulong(128).encode(b2);
-        assert_eq!(
-            Ok(Variant::Ulong(128)),
-            Variant::decode(b2).to_full_result()
-        );
-
-        let b3 = &mut BytesMut::with_capacity(0);
-        Variant::Ulong(2147483649).encode(b3);
-        assert_eq!(
-            Ok(Variant::Ulong(2147483649)),
-            Variant::decode(b3).to_full_result()
-        );
-    }
-
-    #[test]
-    fn variant_byte() {
-        let b1 = &mut BytesMut::with_capacity(0);
-        Variant::Byte(-128).encode(b1);
-        assert_eq!(
-            Ok(Variant::Byte(-128)),
-            Variant::decode(b1).to_full_result()
-        );
-    }
-
-    #[test]
-    fn variant_short() {
-        let b1 = &mut BytesMut::with_capacity(0);
-        Variant::Short(-255).encode(b1);
-        assert_eq!(
-            Ok(Variant::Short(-255)),
-            Variant::decode(b1).to_full_result()
-        );
-    }
-
-    #[test]
-    fn variant_int() {
-        let b1 = &mut BytesMut::with_capacity(0);
-        Variant::Int(0).encode(b1);
-        assert_eq!(Ok(Variant::Int(0)), Variant::decode(b1).to_full_result());
-
-        let b2 = &mut BytesMut::with_capacity(0);
-        Variant::Int(-50000).encode(b2);
-        assert_eq!(
-            Ok(Variant::Int(-50000)),
-            Variant::decode(b2).to_full_result()
-        );
-
-        let b3 = &mut BytesMut::with_capacity(0);
-        Variant::Int(-128).encode(b3);
-        assert_eq!(Ok(Variant::Int(-128)), Variant::decode(b3).to_full_result());
-    }
-
-    #[test]
-    fn variant_long() {
-        let b1 = &mut BytesMut::with_capacity(0);
-        Variant::Ulong(0).encode(b1);
-        assert_eq!(Ok(Variant::Ulong(0)), Variant::decode(b1).to_full_result());
-
-        let b2 = &mut BytesMut::with_capacity(0);
-        Variant::Long(-2147483647).encode(b2);
-        assert_eq!(
-            Ok(Variant::Long(-2147483647)),
-            Variant::decode(b2).to_full_result()
-        );
-
-        let b3 = &mut BytesMut::with_capacity(0);
-        Variant::Long(-128).encode(b3);
-        assert_eq!(
-            Ok(Variant::Long(-128)),
-            Variant::decode(b3).to_full_result()
-        );
-    }
-
-    #[test]
-    fn variant_float() {
-        let b1 = &mut BytesMut::with_capacity(0);
-        Variant::Float(1.234).encode(b1);
-        assert_eq!(
-            Ok(Variant::Float(1.234)),
-            Variant::decode(b1).to_full_result()
-        );
-    }
-
-    #[test]
-    fn variant_double() {
-        let b1 = &mut BytesMut::with_capacity(0);
-        Variant::Double(1.234).encode(b1);
-        assert_eq!(
-            Ok(Variant::Double(1.234)),
-            Variant::decode(b1).to_full_result()
-        );
-    }
-
-    #[test]
-    fn variant_char() {
-        let b1 = &mut BytesMut::with_capacity(0);
-        Variant::Char('💯').encode(b1);
-        assert_eq!(
-            Ok(Variant::Char('💯')),
-            Variant::decode(b1).to_full_result()
-        );
-    }
-
     /// UTC with a precision of milliseconds. For example, 1311704463521
     /// represents the moment 2011-07-26T18:21:03.521Z.
     #[test]
@@ -654,93 +411,6 @@ mod tests {
         let expected = Utc.ymd(1968, 7, 26).and_hms_milli(18, 21, 3, 521);
         assert_eq!(
             Ok(Variant::Timestamp(expected)),
-            Variant::decode(b1).to_full_result()
-        );
-    }
-
-    #[test]
-    fn variant_uuid() {
-        let b1 = &mut BytesMut::with_capacity(0);
-        let bytes = [4, 54, 67, 12, 43, 2, 98, 76, 32, 50, 87, 5, 1, 33, 43, 87];
-        let u1 = Uuid::from_bytes(&bytes).expect("parse error");
-        Variant::Uuid(u1).encode(b1);
-
-        let expected = Variant::Uuid(
-            Uuid::parse_str("0436430c2b02624c2032570501212b57").expect("parse error"),
-        );
-        assert_eq!(Ok(expected), Variant::decode(b1).to_full_result());
-    }
-
-    #[test]
-    fn variant_binary_short() {
-        let b1 = &mut BytesMut::with_capacity(0);
-        let bytes = [4u8, 54, 67, 12, 43, 2, 98, 76, 32, 50, 87, 5, 1, 33, 43, 87];
-        Variant::Binary(Bytes::from(&bytes[..])).encode(b1);
-
-        let expected = [4u8, 54, 67, 12, 43, 2, 98, 76, 32, 50, 87, 5, 1, 33, 43, 87];
-        assert_eq!(
-            Ok(Variant::Binary(Bytes::from(&expected[..]))),
-            Variant::decode(b1).to_full_result()
-        );
-    }
-
-    #[test]
-    fn variant_binary_long() {
-        let b1 = &mut BytesMut::with_capacity(0);
-        let bytes = [4u8; 500];
-        Variant::Binary(Bytes::from(&bytes[..])).encode(b1);
-
-        let expected = [4u8; 500];
-        assert_eq!(
-            Ok(Variant::Binary(Bytes::from(&expected[..]))),
-            Variant::decode(b1).to_full_result()
-        );
-    }
-
-    #[test]
-    fn variant_string_short() {
-        let b1 = &mut BytesMut::with_capacity(0);
-        Variant::String(ByteStr::from("Hello there")).encode(b1);
-
-        assert_eq!(
-            Ok(Variant::String(ByteStr::from("Hello there"))),
-            Variant::decode(b1).to_full_result()
-        );
-    }
-
-    #[test]
-    fn variant_string_long() {
-        let b1 = &mut BytesMut::with_capacity(0);
-        let s1 = ByteStr::from(LOREM);
-        Variant::String(s1).encode(b1);
-
-        let expected = ByteStr::from(LOREM);
-        assert_eq!(
-            Ok(Variant::String(expected)),
-            Variant::decode(b1).to_full_result()
-        );
-    }
-
-    #[test]
-    fn variant_symbol_short() {
-        let b1 = &mut BytesMut::with_capacity(0);
-        Variant::Symbol(Symbol::from("Hello there")).encode(b1);
-
-        assert_eq!(
-            Ok(Variant::Symbol(Symbol::from("Hello there"))),
-            Variant::decode(b1).to_full_result()
-        );
-    }
-
-    #[test]
-    fn symbol_long() {
-        let b1 = &mut BytesMut::with_capacity(0);
-        let s1 = Symbol::from(LOREM);
-        Variant::Symbol(s1).encode(b1);
-
-        let expected = Symbol::from(LOREM);
-        assert_eq!(
-            Ok(Variant::Symbol(expected)),
             Variant::decode(b1).to_full_result()
         );
     }

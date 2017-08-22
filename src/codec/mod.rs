@@ -12,8 +12,7 @@ pub trait Encode {
 }
 
 pub trait Decode
-where
-    Self: Sized,
+    where Self: Sized
 {
     fn decode(bytes: &[u8]) -> IResult<&[u8], Self, u32>;
 }

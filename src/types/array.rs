@@ -38,7 +38,7 @@ impl<'a, T: Decode> Iterator for IntoIter<T> {
         if self.bytes.is_empty() {
             None
         } else {
-            let (remaining, result) = match self.constructor.construct(&self.bytes[..]) {
+            let (remaining, result) = match self.constructor.decode(&self.bytes[..]) {
                 IResult::Done(remaining, result) => {
                     let num = remaining.as_ptr() as usize - self.bytes.as_ptr() as usize;
                     let remaining = self.bytes.slice_from(num);

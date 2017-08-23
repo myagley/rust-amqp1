@@ -1,8 +1,7 @@
 use std::iter::ExactSizeIterator;
-use std::marker::PhantomData;
 
 use bytes::Bytes;
-use codec::Decode;
+use codec::{Constructor, Decode};
 use nom::IResult;
 
 pub struct Array<T>
@@ -10,15 +9,15 @@ pub struct Array<T>
 {
     count: usize,
     bytes: Bytes,
-    phantom: PhantomData<T>,
+    constructor: Constructor<T>,
 }
 
 impl<T: Decode> Array<T> {
-    pub fn new(count: usize, bytes: Bytes) -> Array<T> {
+    pub fn new(constructor: Constructor<T>, count: usize, bytes: Bytes) -> Array<T> {
         Array {
             count,
             bytes,
-            phantom: PhantomData,
+            constructor,
         }
     }
 }
@@ -28,7 +27,7 @@ pub struct IntoIter<T>
 {
     count: usize,
     bytes: Bytes,
-    phantom: PhantomData<T>,
+    constructor: Constructor<T>,
 }
 
 impl<'a, T: Decode> Iterator for IntoIter<T> {
@@ -39,7 +38,7 @@ impl<'a, T: Decode> Iterator for IntoIter<T> {
         if self.bytes.is_empty() {
             None
         } else {
-            let (remaining, result) = match T::decode(&self.bytes[..]) {
+            let (remaining, result) = match self.constructor.construct(&self.bytes[..]) {
                 IResult::Done(remaining, result) => {
                     let num = remaining.as_ptr() as usize - self.bytes.as_ptr() as usize;
                     let remaining = self.bytes.slice_from(num);
@@ -71,7 +70,7 @@ impl<'a, T> IntoIterator for &'a Array<T>
         IntoIter {
             count: self.count,
             bytes: self.bytes.clone(),
-            phantom: PhantomData,
+            constructor: self.constructor.clone(),
         }
     }
 }

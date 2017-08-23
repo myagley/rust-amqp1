@@ -2,7 +2,7 @@ use std::{char, str, u8};
 
 use bytes::Bytes;
 use chrono::{DateTime, TimeZone, Utc};
-use codec::Decode;
+use codec::{Constructor, Decode};
 use framing::{AmqpFrame, Frame, AMQP_TYPE, HEADER_LEN};
 use nom::{ErrorKind, IResult, be_f32, be_f64, be_i16, be_i32, be_i64, be_i8, be_u16, be_u32, be_u64, be_u8};
 use types::{ByteStr, Null, Symbol, Variant};
@@ -25,11 +25,41 @@ macro_rules! error_if (
   );
 );
 
+impl Constructor<Null> {
+    fn null(bytes: &[u8]) -> IResult<&[u8], Null, u32> {
+        IResult::Done(bytes, Null)
+    }
+}
+
 impl Decode for Null {
-    named!(decode<Null>, map_res!(tag!([0x40u8]), |_| Ok::<Null, ()>(Null)));
+    named!(constructor<Constructor<Null>>, map!(tag!([0x40u8]), |_| Constructor { decode: Constructor::<Null>::null }));
+
+    named!(decode<Null>, map!(tag!([0x40u8]), |_| Null));
+}
+
+// Bool
+impl Constructor<bool> {
+    named!(fixed1<bool>, alt!(
+        map!(tag!([0x00u8]), |_| false) |
+        map!(tag!([0x01u8]), |_| true)
+    ));
+
+    fn false_fixed0(bytes: &[u8]) -> IResult<&[u8], bool, u32> {
+        IResult::Done(bytes, false)
+    }
+
+    fn true_fixed0(bytes: &[u8]) -> IResult<&[u8], bool, u32> {
+        IResult::Done(bytes, true)
+    }
 }
 
 impl Decode for bool {
+    named!(constructor<Constructor<bool>>, alt!(
+        map!(tag!([0x56u8]), |_| Constructor { decode: Constructor::<bool>::fixed1 }) |
+        map!(tag!([0x41u8]), |_| Constructor { decode: Constructor::<bool>::true_fixed0 }) |
+        map!(tag!([0x42u8]), |_| Constructor { decode: Constructor::<bool>::false_fixed0 })
+    ));
+
     named!(decode<bool>, alt!(
         map_res!(tag!([0x56, 0x00]), |_| Ok::<bool, ()>(false)) |
         map_res!(tag!([0x56, 0x01]), |_| Ok::<bool, ()>(true)) |
@@ -39,14 +69,33 @@ impl Decode for bool {
 }
 
 impl Decode for u8 {
+    named!(constructor<Constructor<u8>>, map!(tag!([0x50u8]), |_| (Constructor { decode: be_u8 })));
+
     named!(decode<u8>, do_parse!(tag!([0x50u8]) >> byte: be_u8 >> (byte)));
 }
 
 impl Decode for u16 {
+    named!(constructor<Constructor<u16>>, map!(tag!([0x60u8]), |_| (Constructor { decode: be_u16 })));
+
     named!(decode<u16>, do_parse!(tag!([0x60u8]) >> short: be_u16 >> (short)));
 }
 
+// u32
+impl Constructor<u32> {
+    named!(small<u32>, map!(be_u8, |i| i as u32));
+
+    fn zero(bytes: &[u8]) -> IResult<&[u8], u32, u32> {
+        IResult::Done(bytes, 0)
+    }
+}
+
 impl Decode for u32 {
+    named!(constructor<Constructor<u32>>, alt!(
+        map!(tag!([0x70u8]), |_| Constructor { decode: be_u32 }) |
+        map!(tag!([0x52u8]), |_| Constructor { decode: Constructor::<u32>::small }) |
+        map!(tag!([0x43u8]), |_| Constructor { decode: Constructor::<u32>::zero })
+    ));
+
     named!(decode<u32>, alt!(
         do_parse!(tag!([0x70u8]) >> uint: be_u32 >> (uint)) |
         do_parse!(tag!([0x52u8]) >> uint: be_u8 >> (uint as u32)) |
@@ -54,7 +103,22 @@ impl Decode for u32 {
     ));
 }
 
+// u64
+impl Constructor<u64> {
+    named!(small<u64>, map!(be_u8, |i| i as u64));
+
+    fn zero(bytes: &[u8]) -> IResult<&[u8], u64, u32> {
+        IResult::Done(bytes, 0)
+    }
+}
+
 impl Decode for u64 {
+    named!(constructor<Constructor<u64>>, alt!(
+        map!(tag!([0x80u8]), |_| Constructor { decode: be_u64 }) |
+        map!(tag!([0x53u8]), |_| Constructor { decode: Constructor::<u64>::small }) |
+        map!(tag!([0x44u8]), |_| Constructor { decode: Constructor::<u64>::zero })
+    ));
+
     named!(decode<u64>, alt!(
         do_parse!(tag!([0x80u8]) >> uint: be_u64 >> (uint)) |
         do_parse!(tag!([0x53u8]) >> uint: be_u8 >> (uint as u64)) |
@@ -63,21 +127,45 @@ impl Decode for u64 {
 }
 
 impl Decode for i8 {
+    named!(constructor<Constructor<i8>>, map!(tag!([0x51u8]), |_| (Constructor { decode: be_i8 })));
+
     named!(decode<i8>, do_parse!(tag!([0x51u8]) >> byte: be_i8 >> (byte)));
 }
 
 impl Decode for i16 {
+    named!(constructor<Constructor<i16>>, map!(tag!([0x61u8]), |_| (Constructor { decode: be_i16 })));
+
     named!(decode<i16>, do_parse!(tag!([0x61u8]) >> short: be_i16 >> (short)));
 }
 
+// i32
+impl Constructor<i32> {
+    named!(small<i32>, map!(be_i8, |i| i as i32));
+}
+
 impl Decode for i32 {
+    named!(constructor<Constructor<i32>>, alt!(
+        map!(tag!([0x71u8]), |_| Constructor { decode: be_i32 }) |
+        map!(tag!([0x54u8]), |_| Constructor { decode: Constructor::<i32>::small })
+    ));
+
     named!(decode<i32>, alt!(
         do_parse!(tag!([0x71u8]) >> int: be_i32 >> (int)) |
         do_parse!(tag!([0x54u8]) >> int: be_i8 >> (int as i32))
     ));
 }
 
+// i64
+impl Constructor<i64> {
+    named!(small<i64>, map!(be_i8, |i| i as i64));
+}
+
 impl Decode for i64 {
+    named!(constructor<Constructor<i64>>, alt!(
+        map!(tag!([0x81u8]), |_| Constructor { decode: be_i64 } ) |
+        map!(tag!([0x55u8]), |_| Constructor { decode: Constructor::<i64>::small })
+    ));
+
     named!(decode<i64>, alt!(
         do_parse!(tag!([0x81u8]) >> long: be_i64 >> (long)) |
         do_parse!(tag!([0x55u8]) >> long: be_i8 >> (long as i64))
@@ -85,40 +173,94 @@ impl Decode for i64 {
 }
 
 impl Decode for f32 {
+    named!(constructor<Constructor<f32>>, map!(tag!([0x72u8]), |_| Constructor { decode: be_f32 } ));
+
     named!(decode<f32>, do_parse!(tag!([0x72u8]) >> float: be_f32 >> (float)));
 }
 
 impl Decode for f64 {
+    named!(constructor<Constructor<f64>>, map!(tag!([0x82u8]), |_| Constructor { decode: be_f64 } ));
+
     named!(decode<f64>, do_parse!(tag!([0x82u8]) >> double: be_f64 >> (double)));
 }
 
+// char
+impl Constructor<char> {
+    named!(from_u32<char>, map_opt!(be_u32, char::from_u32));
+}
+
 impl Decode for char {
+    named!(constructor<Constructor<char>>, map!(tag!([0x73u8]), |_| Constructor { decode: Constructor::<char>::from_u32 } ));
+
     named!(decode<char>, map_opt!(do_parse!(tag!([0x73u8]) >> int: be_u32 >> (int)), |c| char::from_u32(c)));
 }
 
+impl Constructor<DateTime<Utc>> {
+    named!(from_millis<DateTime<Utc>>, map!(be_i64, datetime_from_millis));
+}
+
 impl Decode for DateTime<Utc> {
+    named!(constructor<Constructor<DateTime<Utc>>>, map!(tag!([0x83u8]), |_| Constructor { decode: Constructor::<DateTime<Utc>>::from_millis }));
+
     named!(decode<DateTime<Utc>>, do_parse!(tag!([0x83u8]) >> timestamp: be_i64 >> (datetime_from_millis(timestamp))));
 }
 
+impl Constructor<Uuid> {
+    named!(from_bytes<Uuid>, map_res!(take!(16), Uuid::from_bytes));
+}
+
 impl Decode for Uuid {
+    named!(constructor<Constructor<Uuid>>, map!(tag!([0x98u8]), |_| Constructor { decode: Constructor::<Uuid>::from_bytes }));
+
     named!(decode<Uuid>, do_parse!(tag!([0x98u8]) >> uuid: map_res!(take!(16), Uuid::from_bytes) >> (uuid)));
 }
 
+// Bytes
+impl Constructor<Bytes> {
+    named!(short<Bytes>, do_parse!(bytes: length_bytes!(be_u8) >> (Bytes::from(bytes))));
+    named!(long<Bytes>, do_parse!(bytes: length_bytes!(be_u32) >> (Bytes::from(bytes))));
+}
+
 impl Decode for Bytes {
+    named!(constructor<Constructor<Bytes>>, alt!(
+        map!(tag!([0xA0u8]), |_| Constructor { decode: Constructor::<Bytes>::short } ) |
+        map!(tag!([0xB0u8]), |_| Constructor { decode: Constructor::<Bytes>::long } )
+    ));
+
     named!(decode<Bytes>, alt!(
         do_parse!(tag!([0xA0u8]) >> bytes: length_bytes!(be_u8) >> (Bytes::from(bytes))) |
         do_parse!(tag!([0xB0u8]) >> bytes: length_bytes!(be_u32) >> (Bytes::from(bytes)))
     ));
 }
 
+impl Constructor<ByteStr> {
+    named!(short<ByteStr>, do_parse!(string: map_res!(length_bytes!(be_u8), str::from_utf8) >> (ByteStr::from(string))));
+    named!(long<ByteStr>, do_parse!(string: map_res!(length_bytes!(be_u32), str::from_utf8) >> (ByteStr::from(string))));
+}
+
 impl Decode for ByteStr {
+    named!(constructor<Constructor<ByteStr>>, alt!(
+        map!(tag!([0xA1u8]), |_| Constructor { decode: Constructor::<ByteStr>::short } ) |
+        map!(tag!([0xB1u8]), |_| Constructor { decode: Constructor::<ByteStr>::long } )
+    ));
+
     named!(decode<ByteStr>, alt!(
         do_parse!(tag!([0xA1u8]) >> string: map_res!(length_bytes!(be_u8), str::from_utf8) >> (ByteStr::from(string))) |
         do_parse!(tag!([0xB1u8]) >> string: map_res!(length_bytes!(be_u32), str::from_utf8) >> (ByteStr::from(string)))
     ));
 }
 
+impl Constructor<Symbol> {
+    named!(short<Symbol>, do_parse!(string: map_res!(length_bytes!(be_u8), str::from_utf8) >> (Symbol::from(string))));
+    named!(long<Symbol>, do_parse!(string: map_res!(length_bytes!(be_u32), str::from_utf8) >> (Symbol::from(string))));
+}
+
 impl Decode for Symbol {
+    named!(constructor<Constructor<Symbol>>, alt!(
+        map!(tag!([0xA3u8]), |_| Constructor { decode: Constructor::<Symbol>::short } ) |
+        map!(tag!([0xB3u8]), |_| Constructor { decode: Constructor::<Symbol>::long } )
+    ));
+
     named!(decode<Symbol>, alt!(
         do_parse!(tag!([0xA3u8]) >> string: map_res!(length_bytes!(be_u8), str::from_utf8) >> (Symbol::from(string))) |
         do_parse!(tag!([0xB3u8]) >> string: map_res!(length_bytes!(be_u32), str::from_utf8) >> (Symbol::from(string)))
@@ -126,6 +268,10 @@ impl Decode for Symbol {
 }
 
 impl Decode for Variant {
+    fn constructor(bytes: &[u8]) -> IResult<&[u8], Constructor<Variant>, u32> {
+        IResult::Done(bytes, Constructor { decode: Variant::decode })
+    }
+
     named!(decode<Variant>, alt!(
         map!(Null::decode, |_| Variant::Null) |
         map!(bool::decode, Variant::Boolean) |
@@ -149,6 +295,10 @@ impl Decode for Variant {
 }
 
 impl Decode for Frame {
+    fn constructor(bytes: &[u8]) -> IResult<&[u8], Constructor<Frame>, u32> {
+        IResult::Done(bytes, Constructor { decode: Frame::decode })
+    }
+
     named!(decode<Frame>,
         do_parse!(
             size: be_u32 >>

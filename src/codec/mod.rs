@@ -3,11 +3,8 @@ use std::marker::Sized;
 use bytes::BytesMut;
 use nom::IResult;
 
-mod constructor;
 mod decode;
 mod encode;
-
-pub use self::constructor::Constructor;
 
 pub trait Encode {
     fn encoded_size(&self) -> usize;

@@ -148,6 +148,13 @@ impl Decode for Variant {
     ));
 }
 
+impl<T: Decode> Decode for Option<T> {
+    named!(decode<Option<T>>, alt!(
+        map!(T::decode, |v| Some(v)) |
+        map!(Null::decode, |_| None)
+    ));
+}
+
 impl Decode for Frame {
     named!(decode<Frame>,
         do_parse!(
@@ -412,6 +419,46 @@ mod tests {
         assert_eq!(
             Ok(Variant::Timestamp(expected)),
             Variant::decode(b1).to_full_result()
+        );
+    }
+
+    #[test]
+    fn option_i8() {
+        let b1 = &mut BytesMut::with_capacity(0);
+        Some(42i8).encode(b1);
+
+        assert_eq!(
+            Ok(Some(42)),
+            Option::<i8>::decode(b1).to_full_result()
+        );
+
+        let b2 = &mut BytesMut::with_capacity(0);
+        let o1: Option<i8> = None;
+        o1.encode(b2);
+
+        assert_eq!(
+            Ok(None),
+            Option::<i8>::decode(b2).to_full_result()
+        );
+    }
+
+    #[test]
+    fn option_string() {
+        let b1 = &mut BytesMut::with_capacity(0);
+        Some(ByteStr::from("hello")).encode(b1);
+
+        assert_eq!(
+            Ok(Some(ByteStr::from("hello"))),
+            Option::<ByteStr>::decode(b1).to_full_result()
+        );
+
+        let b2 = &mut BytesMut::with_capacity(0);
+        let o1: Option<ByteStr> = None;
+        o1.encode(b2);
+
+        assert_eq!(
+            Ok(None),
+            Option::<ByteStr>::decode(b2).to_full_result()
         );
     }
 }

@@ -7,6 +7,7 @@ use framing::{AmqpFrame, Frame, AMQP_TYPE, HEADER_LEN};
 use nom::{ErrorKind, IResult, be_f32, be_f64, be_i16, be_i32, be_i64, be_i8, be_u16, be_u32, be_u64, be_u8};
 use types::{ByteStr, Null, Symbol, Variant};
 use uuid::Uuid;
+use ordered_float::OrderedFloat;
 
 pub const INVALID_FRAME: u32 = 0x0001;
 
@@ -137,8 +138,8 @@ impl Decode for Variant {
         map!(i16::decode, Variant::Short) |
         map!(i32::decode, Variant::Int) |
         map!(i64::decode, Variant::Long) |
-        map!(f32::decode, Variant::Float) |
-        map!(f64::decode, Variant::Double) |
+        map!(f32::decode, |f| Variant::Float(OrderedFloat(f))) |
+        map!(f64::decode, |f| Variant::Double(OrderedFloat(f))) |
         map!(char::decode, Variant::Char) |
         map!(DateTime::<Utc>::decode, Variant::Timestamp) |
         map!(Uuid::decode, Variant::Uuid) |

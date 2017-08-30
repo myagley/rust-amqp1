@@ -4,7 +4,8 @@ use bytes::Bytes;
 pub const HEADER_LEN: usize = 8;
 
 /// AMQP Frame type marker (0)
-pub const AMQP_TYPE: u8 = 0;
+pub const AMQP_TYPE: u8 = 0x00;
+pub const SASL_TYPE: u8 = 0x01;
 
 /// Represents a frame. There are two common variants: AMQP and SASL frames
 #[derive(Debug, PartialEq, Eq)]

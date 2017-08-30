@@ -2,9 +2,10 @@ use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use types::{ByteStr, Symbol};
 use uuid::Uuid;
+use ordered_float::OrderedFloat;
 
 /// Represents an AMQP type for use in polymorphic collections
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Eq, PartialEq, Hash, Clone)]
 pub enum Variant {
     /// Indicates an empty value.
     Null,
@@ -37,10 +38,10 @@ pub enum Variant {
     Long(i64),
 
     /// 32-bit floating point number (IEEE 754-2008 binary32).
-    Float(f32),
+    Float(OrderedFloat<f32>),
 
     /// 64-bit floating point number (IEEE 754-2008 binary64).
-    Double(f64),
+    Double(OrderedFloat<f64>),
 
     // Decimal32(d32),
     // Decimal64(d64),

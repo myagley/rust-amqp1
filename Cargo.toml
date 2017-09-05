@@ -6,13 +6,18 @@ authors = ["Mike Yagley <myagley@gmail.com>"]
 [dependencies]
 bytes = "0.4"
 chrono = "0.4"
-nom = "^3.1"
+#nom = "3.1"
 uuid = "0.4"
 ordered-float = "0.5"
+error-chain = "0.10"
+
+[dependencies.nom]
+version = "3.1"
+features = ["nightly"]
 
 [build-dependencies]
-handlebars   = "^0.27"
-serde        = "^1.0"
-serde_derive = "^1.0"
-serde_json   = "^1.0"
-lazy_static  = "^0.2"
+handlebars   = "0.27"
+serde        = "1.0"
+serde_derive = "1.0"
+serde_json   = "1.0"
+lazy_static  = "0.2"

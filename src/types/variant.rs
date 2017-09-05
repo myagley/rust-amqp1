@@ -65,7 +65,7 @@ pub enum Variant {
     String(ByteStr),
 
     /// Symbolic values from a constrained domain.
-    Symbol(Symbol),
+    Symbol(Symbol)
 }
 
 #[cfg(test)]

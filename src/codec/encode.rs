@@ -61,7 +61,6 @@ impl Encode for u32 {
         } else {
             2
         }
-
     }
 
     fn encode(&self, buf: &mut BytesMut) {

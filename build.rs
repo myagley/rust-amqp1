@@ -9,7 +9,7 @@ extern crate serde_json;
 mod codegen;
 
 use std::env;
-use handlebars::{Handlebars};
+use handlebars::{Handlebars, RenderError, RenderContext, Helper};
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, Write};
 
@@ -25,6 +25,7 @@ fn main() {
     let definitions = codegen::parse(spec);
 
     let mut codegen = Handlebars::new();
+    codegen.register_helper("snake", Box::new(snake_helper));
     codegen
         .register_template_string("definitions", template.to_string())
         .expect("Failed to register template.");
@@ -39,6 +40,13 @@ fn main() {
     }
 
     reformat_file(&def_path);
+}
+
+pub fn snake_helper (h: &Helper, _: &Handlebars, rc: &mut RenderContext) -> Result<(), RenderError> {
+    let value = h.param(0).ok_or_else(|| RenderError::new("Param not found for helper \"snake\""))?;
+    let param = value.value().as_str().ok_or_else(|| RenderError::new("Non-string param given to helper \"snake\""))?;
+    rc.writer.write_all(codegen::snake_case(param).as_bytes())?;
+    Ok(())
 }
 
 fn reformat_file(path: &std::path::Path) {

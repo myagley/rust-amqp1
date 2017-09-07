@@ -5,6 +5,36 @@ pub enum {{provide.name}} {
     {{item.ty}}({{item.ty}}),
 {{/each}}
 }
+
+{{#if provide.described}}
+impl Decode2 for {{provide.name}} {
+    fn decode_with_format(input: &[u8], format: u8) -> IResult<&[u8], Self> {
+        validate_code!(format, codec::FORMATCODE_DESCRIBED);
+        do_parse!(input,
+            descriptor: call!(Descriptor::decode_with_format, format) >>
+            result: call!(decode_{{snake provide.name}}, descriptor) >>
+            (result)
+        )
+    }
+}
+fn decode_{{snake provide.name}}(input: &[u8], descriptor: Descriptor) -> IResult<&[u8], {{provide.name}}> {
+    match descriptor {
+        {{#each provide.options as |option|}}
+        Descriptor::Ulong({{option.descriptor.code}}) => map!(input, call!({{option.ty}}::decode), {{provide.name}}::{{option.ty}}),
+        {{/each}}
+        {{#each provide.options as |option|}}
+        Descriptor::Symbol(ref a) if a.as_str() == "{{option.descriptor.name}}" => map!(input, call!({{option.ty}}::decode), {{provide.name}}::{{option.ty}}),
+        {{/each}}
+        _ => IResult::Error(error_code!(ErrorKind::Custom(codec::INVALID_DESCRIPTOR)))
+    }
+}
+{{else}}
+impl Decode for {{provide.name}} {
+    fn decode(input: &[u8]) -> IResult<&[u8], Self> {
+        unimplemented!();
+    }
+}
+{{/if}}
 {{/each}}
 
 {{#each defs.aliases as |alias|}}

@@ -3,8 +3,11 @@ use std::marker::Sized;
 use bytes::BytesMut;
 use nom::IResult;
 
+#[macro_use]
 mod decode;
 mod encode;
+
+pub use self::decode::{INVALID_FORMATCODE, INVALID_DESCRIPTOR};
 
 pub trait Encode {
     fn encoded_size(&self) -> usize;
@@ -21,7 +24,6 @@ pub trait Decode2
     where Self: Sized
 {
     fn decode_with_format(bytes: &[u8], format: u8) -> IResult<&[u8], Self, u32>;
-    //fn decode2(bytes: &[u8]) -> IResult<&[u8], Self, u32>;
 }
 
 

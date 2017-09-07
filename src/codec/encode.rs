@@ -3,8 +3,7 @@ use std::{i8, u8};
 use bytes::{BigEndian, BufMut, Bytes, BytesMut};
 use chrono::{DateTime, Utc};
 use codec::Encode;
-use framing;
-use framing::{Frame, AmqpFrame};
+use framing::{self, Frame, AmqpFrame};
 use types::{ByteStr, Null, Symbol, Variant};
 use uuid::Uuid;
 
@@ -399,12 +398,14 @@ impl Encode for Frame {
     fn encoded_size(&self) -> usize {
         match *self {
             Frame::Amqp(ref a) => a.encoded_size(),
+            Frame::Sasl() => unimplemented!()
         }
     }
 
     fn encode(&self, buf: &mut BytesMut) {
         match *self {
             Frame::Amqp(ref a) => a.encode(buf),
+            Frame::Sasl() => unimplemented!()
         }
     }
 }
@@ -423,7 +424,7 @@ impl Encode for AmqpFrame {
         let doff: u8 = (framing::HEADER_LEN / WORD_LEN) as u8;
         buf.put_u32::<BigEndian>(self.encoded_size() as u32);
         buf.put_u8(doff);
-        buf.put_u8(framing::AMQP_TYPE);
+        buf.put_u8(framing::FRAME_TYPE_AMQP);
         buf.put_u16::<BigEndian>(self.channel_id());
         buf.put(self.body());
     }

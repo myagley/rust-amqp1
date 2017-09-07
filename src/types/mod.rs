@@ -12,9 +12,14 @@ use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 use bytes::{BufMut, Bytes, BytesMut};
 use uuid::Uuid;
-use super::codec::{Decode, Encode};
-use nom::{IResult, Needed};
+use super::codec::{self, Decode, Decode2, Encode};
+use nom::{IResult, Needed, ErrorKind};
 use super::errors::*;
+
+pub enum Descriptor {
+    Ulong(u64),
+    Symbol(Symbol)
+}
 
 pub trait Described {
     fn descriptor_name(&self) -> &str;

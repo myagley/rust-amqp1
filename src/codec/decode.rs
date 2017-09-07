@@ -3,14 +3,15 @@ use std::{char, str, u8};
 use bytes::Bytes;
 use chrono::{DateTime, TimeZone, Utc};
 use codec::{self, Decode, Decode2};
-use framing::{AmqpFrame, Frame, AMQP_TYPE, HEADER_LEN};
+use framing::{AmqpFrame, Frame, HEADER_LEN};
 use nom::{ErrorKind, IResult, be_f32, be_f64, be_i16, be_i32, be_i64, be_i8, be_u16, be_u32, be_u64, be_u8};
-use types::{ByteStr, Null, Symbol, Variant};
+use types::{self, ByteStr, Null, Symbol, Variant, Descriptor};
 use uuid::Uuid;
 use ordered_float::OrderedFloat;
 
 pub const INVALID_FRAME: u32 = 0x0001;
 pub const INVALID_FORMATCODE: u32 = 0x0002;
+pub const INVALID_DESCRIPTOR: u32 = 0x0003;
 
 macro_rules! error_if (
   ($i:expr, $cond:expr, $code:expr) => (
@@ -27,19 +28,16 @@ macro_rules! error_if (
   );
 );
 
+#[macro_export]
 macro_rules! validate_code (
   ($format:ident, $code:expr) => (
     {
       if $format != $code {
-        return IResult::Error(error_code!(ErrorKind::Custom(INVALID_FORMATCODE)));
+        return IResult::Error(error_code!(ErrorKind::Custom(::codec::INVALID_FORMATCODE)));
       }
     }
   );
 );
-
-macro_rules! error_code_result {
-    () => { IResult::Error(error_code!(ErrorKind::Custom(INVALID_FORMATCODE))) };
-}
 
 impl<T: Decode2> Decode for T {
     named!(decode<T>, do_parse!(fmt: be_u8 >> v: call!(T::decode_with_format, fmt) >> (v)));
@@ -231,8 +229,24 @@ impl Decode2 for Variant {
 impl<T: Decode2> Decode2 for Option<T> {
      named_args!(decode_with_format(format: u8) <Option<T>>, switch!(value!(format),
             codec::FORMATCODE_NULL => value!(None) | 
-            _ => map!(T::decode, |v| Some(v))));
+            _ => map!(call!(T::decode_with_format, format), |v| Some(v))));
 }
+
+impl Decode2 for Descriptor {
+    named_args!(decode_with_format(format: u8) <Descriptor>, switch!(value!(format),
+        codec::FORMATCODE_SMALLULONG => map!(call!(u64::decode_with_format, format), Descriptor::Ulong) |
+        codec::FORMATCODE_ULONG => map!(call!(u64::decode_with_format, format), Descriptor::Ulong) |
+        codec::FORMATCODE_SYMBOL8 => map!(call!(Symbol::decode_with_format, format), Descriptor::Symbol) |
+        codec::FORMATCODE_SYMBOL32 => map!(call!(Symbol::decode_with_format, format), Descriptor::Symbol)
+     ));
+}
+
+named_args!(parse_amqp_frame(size: u32, doff: u8) <Frame>, do_parse!(
+    channel_id: be_u16 >>
+    extended_header: take!(doff as u32 * 4 - 8) >>
+    performative: call!(types::Frame::decode) >>
+    body: map!(take!(size - doff as u32 * 4), Bytes::from) >>
+    (Frame::Amqp(AmqpFrame::new(channel_id, performative, body)))));
 
 impl Decode for Frame {
     named!(decode<Frame>,
@@ -243,17 +257,9 @@ impl Decode for Frame {
             doff: be_u8 >>
             error_if!(doff < 2, INVALID_FRAME) >>
 
-            frame: alt!(
-                // AMQP Frame
-                do_parse!(
-                    typ:  tag!([AMQP_TYPE]) >>  // Amqp frame Type
-
-                    channel_id: be_u16 >>
-                    extended_header: map!(take!(doff as u32 * 4 - 8), Bytes::from)  >>
-                    body: map!(take!(size - doff as u32 * 4), Bytes::from) >>
-
-                    (Frame::Amqp(AmqpFrame::new(channel_id, body)))
-                )
+            frame: switch!(be_u8,
+                FRAME_TYPE_AMQP => call!(parse_amqp_frame, size, doff) |
+                FRAME_TYPE_SASL => value!(Frame::Sasl())
             ) >>
             (frame)
         )

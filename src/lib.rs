@@ -9,6 +9,7 @@ extern crate ordered_float;
 #[macro_use]
 extern crate error_chain;
 
+#[macro_use]
 pub mod codec;
 pub mod framing;
 pub mod types;

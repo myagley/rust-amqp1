@@ -126,13 +126,14 @@ pub struct Definitions {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct ProvidesEnum {
     name: String,
+    described: bool,
     options: Vec<ProvidesItem>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct ProvidesItem {
     ty: String,
-    descriptor: Option<Descriptor>,
+    descriptor: Descriptor,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -179,17 +180,17 @@ impl Definitions {
             match t {
                 _Type::Alias(ref a) if a.source != "map" => {
                     let al = Alias::from(a.clone());
-                    Definitions::register_provides(&mut provide_map, &al.name, &al.provides);
+                    Definitions::register_provides(&mut provide_map, &al.name, None, &al.provides);
                     aliases.push(al);
                 }
                 _Type::Choice(ref e) => {
                     let en = Enum::from(e.clone());
-                    Definitions::register_provides(&mut provide_map, &en.name, &en.provides);
+                    Definitions::register_provides(&mut provide_map, &en.name, None, &en.provides);
                     enums.push(en);
                 }
                 _Type::Described(ref l) if l.source == "list" => {
                     let ls = DescribedList::from(l.clone());
-                    Definitions::register_provides(&mut provide_map, &ls.name, &ls.provides);
+                    Definitions::register_provides(&mut provide_map, &ls.name, Some(ls.descriptor.clone()), &ls.provides);
                     lists.push(ls);
                 }
                 _ => {}
@@ -203,6 +204,7 @@ impl Definitions {
             } else {
                 Some(ProvidesEnum {
                     name: k,
+                    described: v.iter().any(|v| v.descriptor.code != 0),
                     options: v,
                 })
             })
@@ -216,13 +218,13 @@ impl Definitions {
         }
     }
 
-    fn register_provides(map: &mut HashMap<String, Vec<ProvidesItem>>, name: &str, provides: &Vec<String>) {
+    fn register_provides(map: &mut HashMap<String, Vec<ProvidesItem>>, name: &str, descriptor: Option<Descriptor>, provides: &Vec<String>) {
         for p in provides.iter() {
             map.entry(p.clone())
                 .or_insert_with(|| vec![])
                 .push(ProvidesItem {
                     ty: name.to_string(),
-                    descriptor: None,
+                    descriptor: descriptor.clone().unwrap_or_else(|| Descriptor{ name: String::new(), domain: 0, code: 0 }),
                 });
         }
     }
@@ -354,7 +356,7 @@ where
     )
 }
 
-fn camel_case(name: &str) -> String {
+pub fn camel_case(name: &str) -> String {
     let mut new_word = true;
     name.chars().fold("".to_string(), |mut result, ch| {
         if ch == '-' || ch == '_' || ch == ' ' {
@@ -368,7 +370,7 @@ fn camel_case(name: &str) -> String {
     })
 }
 
-fn snake_case(name: &str) -> String {
+pub fn snake_case(name: &str) -> String {
     match name {
         "type" => "type_".to_string(),
         "return" => "return_".to_string(),

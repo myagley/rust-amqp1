@@ -1,5 +1,5 @@
 use bytes::Bytes;
-use super::types;
+use super::protocol;
 
 /// Length in bytes of the fixed frame header
 pub const HEADER_LEN: usize = 8;
@@ -19,12 +19,12 @@ pub enum Frame {
 #[derive(Clone, Debug, PartialEq)]
 pub struct AmqpFrame {
     channel_id: u16,
-    performative: types::Frame,
+    performative: protocol::Frame,
     body: Bytes
 }
 
 impl AmqpFrame {
-    pub fn new(channel_id: u16, performative: types::Frame, body: Bytes) -> AmqpFrame {
+    pub fn new(channel_id: u16, performative: protocol::Frame, body: Bytes) -> AmqpFrame {
         AmqpFrame { channel_id, performative, body }
     }
 

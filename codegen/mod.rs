@@ -23,7 +23,7 @@ lazy_static! {
         "Bytes", "ByteStr", "Symbol", "Fields", "Map",
         "MessageId", "Address", "NodeProperties",
         "Outcome", "DeliveryState", "FilterSet", "DeliveryTag",
-        "Symbols", "IetfLanguageTags"]
+        "Symbols", "IetfLanguageTags", "ErrorCondition", "DistributionMode"]
         .iter().map(|s| s.to_string()).collect());
     static ref ENUM_TYPES: Mutex<HashSet<String>> = Mutex::new(HashSet::new());
 }
@@ -292,7 +292,7 @@ impl Field {
         if field.multiple {
             ty.push('s');
         }
-        let is_str = STRING_TYPES.contains(&*field.ty) && !field.multiple;
+        let is_str = STRING_TYPES.contains(&*ty) && !field.multiple;
         let is_ref = REF_TYPES.lock().unwrap().contains(&ty);
         let default = Field::format_default(field.default, &ty);
         Field {
@@ -319,13 +319,14 @@ impl Field {
 }
 
 fn get_type_name(ty: &str, req: Option<String>) -> String {
-    match PRIMITIVE_TYPES.get(ty) {
-        Some(p) => p.to_string(),
-        None => if ty == "*" {
-            camel_case(&*req.expect("Encountered * type without requires."))
-        } else {
-            camel_case(&*ty)
-        },
+    match req {
+        Some(t) => camel_case(&*t),
+        None => {
+            match PRIMITIVE_TYPES.get(ty) {
+                Some(p) => p.to_string(),
+                None => camel_case(&*ty)
+            }
+        }
     }
 }
 

@@ -1,4 +1,5 @@
 {{#each defs.provides as |provide|}}
+{{#if provide.described}}
 #[derive(Clone, Debug, PartialEq)]
 pub enum {{provide.name}} {
 {{#each provide.options as |item|}}
@@ -6,32 +7,18 @@ pub enum {{provide.name}} {
 {{/each}}
 }
 
-{{#if provide.described}}
-impl Decode2 for {{provide.name}} {
-    fn decode_with_format(input: &[u8], format: u8) -> IResult<&[u8], Self> {
-        validate_code!(format, codec::FORMATCODE_DESCRIBED);
-        do_parse!(input,
-            descriptor: call!(Descriptor::decode_with_format, format) >>
-            result: call!(decode_{{snake provide.name}}, descriptor) >>
-            (result)
-        )
-    }
-}
-fn decode_{{snake provide.name}}(input: &[u8], descriptor: Descriptor) -> IResult<&[u8], {{provide.name}}> {
-    match descriptor {
-        {{#each provide.options as |option|}}
-        Descriptor::Ulong({{option.descriptor.code}}) => map!(input, call!({{option.ty}}::decode), {{provide.name}}::{{option.ty}}),
-        {{/each}}
-        {{#each provide.options as |option|}}
-        Descriptor::Symbol(ref a) if a.as_str() == "{{option.descriptor.name}}" => map!(input, call!({{option.ty}}::decode), {{provide.name}}::{{option.ty}}),
-        {{/each}}
-        _ => IResult::Error(error_code!(ErrorKind::Custom(codec::INVALID_DESCRIPTOR)))
-    }
-}
-{{else}}
 impl Decode for {{provide.name}} {
-    fn decode(input: &[u8]) -> IResult<&[u8], Self> {
-        unimplemented!();
+    fn decode(input: &[u8]) -> Result<(&[u8], Self)> {
+        let (input, descriptor) = Descriptor::decode(input)?;
+        match descriptor {
+            {{#each provide.options as |option|}}
+            Descriptor::Ulong({{option.descriptor.code}}) => {{option.ty}}::decode(input).map(|(i, r)| (i, {{provide.name}}::{{option.ty}}(r))),
+            {{/each}}
+            {{#each provide.options as |option|}}
+            Descriptor::Symbol(ref a) if a.as_str() == "{{option.descriptor.name}}" => {{option.ty}}::decode(input).map(|(i, r)| (i, {{provide.name}}::{{option.ty}}(r))),
+            {{/each}}
+            _ => Err(ErrorKind::Custom(codec::INVALID_DESCRIPTOR).into())
+        }
     }
 }
 {{/if}}
@@ -70,8 +57,6 @@ impl Described for {{list.name}} {
 }
 
 impl {{list.name}} {
-
-
     {{#each list.fields as |field|}}
         {{#if field.is_str}}
             {{#if field.optional}}
@@ -103,8 +88,46 @@ impl {{list.name}} {
 }
 
 impl Decode for {{list.name}} {
-    fn decode(bytes: &[u8]) -> IResult<&[u8], Self, u32> {
-        IResult::Incomplete(Needed::Unknown)
+    fn decode(input: &[u8]) -> Result<(&[u8], Self)> {
+        let (input, fmt) = decode_format_code(input)?;
+        let (input, header) = decode_list_header(input, format)?;
+        let mut count = header.count;
+        let mut input = input;
+        {{#each list.fields as |field|}}
+        {{#if field.optional}}
+        let {{field.name}}: Option<{{field.ty}}>;
+        if count > 0 {
+            let decoded = Option::<{{field.ty}}>::decode(input)?;
+            input = decoded.0;
+            {{field.name}} = decoded.1;
+            count -= 1;
+        }
+        else {
+           {{field.name}} = None;
+        }
+        {{else}}
+        let {{field.name}}: {{field.ty}};
+        if count > 0 {
+            {{#if field.default}}
+            let decoded = Option::<{{field.ty}}>::decode(input)?;
+            {{field.name}} = decoded.1.unwrap_or({{field.default}});
+            {{else}}
+            let decoded = {{field.ty}}::decode(input)?;
+            {{field.name}} = decoded.1;
+            {{/if}}
+            input = decoded.0;
+            count -= 1;
+        }
+        else {
+            {{#if field.default}}
+            {{field.name}} = {{field.default}};
+            {{else}}
+            return Err("Required field {{field.name}} was omitted.".into());
+            {{/if}}
+        }
+        {{/if}}
+        {{/each}}
+        Err("nope".into())
     }
 }
 
@@ -114,7 +137,7 @@ impl Encode for {{list.name}} {
     }
 
     fn encode(&self, buf: &mut BytesMut) -> () {
-        buf.put_u8(0x00);
+        buf.put_u8(codec::FORMATCODE_DESCRIBED);
         {{list.descriptor.code}}.encode(buf);
     }
 }

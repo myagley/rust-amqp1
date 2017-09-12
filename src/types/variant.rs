@@ -3,6 +3,7 @@ use chrono::{DateTime, Utc};
 use types::{ByteStr, Symbol};
 use uuid::Uuid;
 use ordered_float::OrderedFloat;
+use std::collections::HashMap;
 
 /// Represents an AMQP type for use in polymorphic collections
 #[derive(Debug, Eq, PartialEq, Hash, Clone)]
@@ -65,7 +66,10 @@ pub enum Variant {
     String(ByteStr),
 
     /// Symbolic values from a constrained domain.
-    Symbol(Symbol)
+    Symbol(Symbol),
+
+    /// Map
+    Map(HashMap<Variant, Variant>)
 }
 
 #[cfg(test)]

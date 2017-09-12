@@ -1,13 +1,22 @@
 use std::marker::Sized;
 
 use bytes::BytesMut;
-use nom::IResult;
+use nom::{IResult};
+use super::errors::{ErrorKind, Result, into_result};
+
+macro_rules! decode_check_len {
+    ($buf:ident, $size:expr) => {
+        if $buf.len() < $size {
+            return Err(::errors::Error::from_kind(::errors::ErrorKind::Incomplete(::nom::Needed::Size($size))));
+        }
+    };
+}
 
 #[macro_use]
 mod decode;
 mod encode;
 
-pub use self::decode::{INVALID_FORMATCODE, INVALID_DESCRIPTOR};
+pub use self::decode::{INVALID_FORMATCODE, INVALID_DESCRIPTOR, decode_list_header, decode_map_header};
 
 pub trait Encode {
     fn encoded_size(&self) -> usize;
@@ -17,15 +26,32 @@ pub trait Encode {
 pub trait Decode
     where Self: Sized
 {
-    fn decode(bytes: &[u8]) -> IResult<&[u8], Self, u32>;
+    fn decode(input: &[u8]) -> Result<(&[u8], Self)>;
 }
 
-pub trait Decode2
+pub trait DecodeFormatted
     where Self: Sized
 {
-    fn decode_with_format(bytes: &[u8], format: u8) -> IResult<&[u8], Self, u32>;
+    fn decode_with_format(input: &[u8], format: u8) -> IResult<&[u8], Self, u32>;
 }
 
+// pub trait DecodeDescribed
+//     where Self: Sized
+// {
+//     fn decode_with_descriptor(input: &[u8], descriptor: Descriptor) -> Result<(&[u8], Self)>;
+// }
+
+impl<T: DecodeFormatted> Decode for T {
+    fn decode(input: &[u8]) -> Result<(&[u8], Self)> {
+        let (input, fmt) = decode_format_code(input)?;
+        into_result(T::decode_with_format(input, fmt))
+    }
+}
+
+pub fn decode_format_code(input: &[u8]) -> Result<(&[u8], u8)> {
+    decode_check_len!(input, 1);
+    Ok((&input[1..], input[0]))
+}
 
 pub const FORMATCODE_DESCRIBED: u8 = 0x00;
 pub const FORMATCODE_NULL: u8 = 0x40; // fixed width --V

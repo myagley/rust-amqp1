@@ -3,14 +3,18 @@ use std::{i8, u8};
 use bytes::{BigEndian, BufMut, Bytes, BytesMut};
 use chrono::{DateTime, Utc};
 use codec::Encode;
-use framing::{self, Frame, AmqpFrame};
-use types::{ByteStr, Null, Symbol, Variant};
+use framing::{self, AmqpFrame, Frame};
+use types::{ByteStr, Symbol, Variant};
 use uuid::Uuid;
 
 fn ensure_capacity<T: Encode>(encodable: &T, buf: &mut BytesMut) {
     if buf.remaining_mut() < encodable.encoded_size() {
         buf.reserve(encodable.encoded_size());
     }
+}
+
+fn encode_null(buf: &mut BytesMut) {
+    buf.put_u8(0x40);
 }
 
 impl Encode for bool {
@@ -21,7 +25,11 @@ impl Encode for bool {
     fn encode(&self, buf: &mut BytesMut) {
         ensure_capacity(self, buf);
 
-        if *self { buf.put_u8(0x40) } else { buf.put_u8(0x41) }
+        if *self {
+            buf.put_u8(0x40)
+        } else {
+            buf.put_u8(0x41)
+        }
     }
 }
 
@@ -131,7 +139,11 @@ impl Encode for i16 {
 
 impl Encode for i32 {
     fn encoded_size(&self) -> usize {
-        if *self > i8::MAX as i32 || *self < i8::MIN as i32 { 5 } else { 2 }
+        if *self > i8::MAX as i32 || *self < i8::MIN as i32 {
+            5
+        } else {
+            2
+        }
     }
 
     fn encode(&self, buf: &mut BytesMut) {
@@ -149,7 +161,11 @@ impl Encode for i32 {
 
 impl Encode for i64 {
     fn encoded_size(&self) -> usize {
-        if *self > i8::MAX as i64 || *self < i8::MIN as i64 { 9 } else { 2 }
+        if *self > i8::MAX as i64 || *self < i8::MIN as i64 {
+            9
+        } else {
+            2
+        }
     }
 
     fn encode(&self, buf: &mut BytesMut) {
@@ -275,17 +291,6 @@ impl Encode for ByteStr {
     }
 }
 
-impl Encode for Null {
-    fn encoded_size(&self) -> usize {
-        1
-    }
-
-    fn encode(&self, buf: &mut BytesMut) {
-        ensure_capacity(self, buf);
-        buf.put_u8(0x40);
-    }
-}
-
 impl Encode for str {
     fn encoded_size(&self) -> usize {
         let length = self.len();
@@ -335,7 +340,7 @@ impl Encode for Symbol {
 impl Encode for Variant {
     fn encoded_size(&self) -> usize {
         match *self {
-            Variant::Null => Null.encoded_size(),
+            Variant::Null => 1,
             Variant::Boolean(b) => b.encoded_size(),
             Variant::Ubyte(b) => b.encoded_size(),
             Variant::Ushort(s) => s.encoded_size(),
@@ -359,7 +364,7 @@ impl Encode for Variant {
     /// Encodes `Variant` into provided `BytesMut`
     fn encode(&self, buf: &mut BytesMut) -> () {
         match *self {
-            Variant::Null => Null.encode(buf),
+            Variant::Null => encode_null(buf),
             Variant::Boolean(b) => b.encode(buf),
             Variant::Ubyte(b) => b.encode(buf),
             Variant::Ushort(s) => s.encode(buf),
@@ -389,7 +394,7 @@ impl<T: Encode> Encode for Option<T> {
     fn encode(&self, buf: &mut BytesMut) -> () {
         match *self {
             Some(ref e) => e.encode(buf),
-            None => Null.encode(buf),
+            None => encode_null(buf),
         }
     }
 }
@@ -398,14 +403,14 @@ impl Encode for Frame {
     fn encoded_size(&self) -> usize {
         match *self {
             Frame::Amqp(ref a) => a.encoded_size(),
-            Frame::Sasl() => unimplemented!()
+            Frame::Sasl() => unimplemented!(),
         }
     }
 
     fn encode(&self, buf: &mut BytesMut) {
         match *self {
             Frame::Amqp(ref a) => a.encode(buf),
-            Frame::Sasl() => unimplemented!()
+            Frame::Sasl() => unimplemented!(),
         }
     }
 }

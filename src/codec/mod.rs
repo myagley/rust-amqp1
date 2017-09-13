@@ -1,8 +1,7 @@
 use std::marker::Sized;
 
 use bytes::BytesMut;
-use nom::{IResult};
-use super::errors::{ErrorKind, Result, into_result};
+use super::errors::{Result, into_result};
 
 macro_rules! decode_check_len {
     ($buf:ident, $size:expr) => {
@@ -16,11 +15,18 @@ macro_rules! decode_check_len {
 mod decode;
 mod encode;
 
-pub use self::decode::{INVALID_FORMATCODE, INVALID_DESCRIPTOR, decode_list_header, decode_map_header};
+pub use self::decode::{INVALID_FORMATCODE, INVALID_DESCRIPTOR};
+pub(crate) use self::decode::{decode_list_header, decode_map_header};
 
 pub trait Encode {
     fn encoded_size(&self) -> usize;
-    fn encode(&self, buf: &mut BytesMut) -> ();
+    fn encode(&self, buf: &mut BytesMut);
+}
+
+pub trait ArrayEncode {
+    const ARRAY_FORMAT_CODE: u8;
+    fn array_encoded_size(&self) -> usize;
+    fn array_encode(&self, buf: &mut BytesMut);
 }
 
 pub trait Decode
@@ -32,7 +38,7 @@ pub trait Decode
 pub trait DecodeFormatted
     where Self: Sized
 {
-    fn decode_with_format(input: &[u8], format: u8) -> IResult<&[u8], Self, u32>;
+    fn decode_with_format(input: &[u8], fmt: u8) -> Result<(&[u8], Self)>;
 }
 
 // pub trait DecodeDescribed
@@ -44,7 +50,7 @@ pub trait DecodeFormatted
 impl<T: DecodeFormatted> Decode for T {
     fn decode(input: &[u8]) -> Result<(&[u8], Self)> {
         let (input, fmt) = decode_format_code(input)?;
-        into_result(T::decode_with_format(input, fmt))
+        T::decode_with_format(input, fmt)
     }
 }
 

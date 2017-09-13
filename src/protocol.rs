@@ -4,7 +4,7 @@ use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 use uuid::Uuid;
 use nom::{IResult, Needed, ErrorKind};
-use super::codec::{self, Decode, DecodeFormatted, Encode, decode_map_header, decode_list_header};
+use super::codec::{self, Decode, DecodeFormatted, Encode, decode_map_header, decode_list_header, INVALID_FORMATCODE};
 use super::types::*;
 
 pub(crate) struct CompoundHeader {
@@ -95,17 +95,17 @@ pub enum MessageId {
 }
 
 impl DecodeFormatted for MessageId {
-    fn decode_with_format(input: &[u8], format: u8) -> IResult<&[u8], Self> {
+    fn decode_with_format(input: &[u8], format: u8) -> Result<(&[u8], Self)> {
         match format {
             codec::FORMATCODE_SMALLULONG |
             codec::FORMATCODE_ULONG |
-            codec::FORMATCODE_ULONG_0 => map!(input, call!(u64::decode_with_format, format), MessageId::Ulong),
-            codec::FORMATCODE_UUID => map!(input, call!(Uuid::decode_with_format, format), MessageId::Uuid),
+            codec::FORMATCODE_ULONG_0 => u64::decode_with_format(input, format).map(|(i, o)| (i, MessageId::Ulong(o))),
+            codec::FORMATCODE_UUID => Uuid::decode_with_format(input, format).map(|(i, o)| (i, MessageId::Uuid(o))),
             codec::FORMATCODE_BINARY8 |
-            codec::FORMATCODE_BINARY32 => map!(input, call!(Bytes::decode_with_format, format), MessageId::Binary),
+            codec::FORMATCODE_BINARY32 => Bytes::decode_with_format(input, format).map(|(i, o)| (i, MessageId::Binary(o))),
             codec::FORMATCODE_STRING8 |
-            codec::FORMATCODE_STRING32 => map!(input, call!(ByteStr::decode_with_format, format), MessageId::String),
-            _ => IResult::Error(error_code!(ErrorKind::Custom(codec::INVALID_FORMATCODE)))
+            codec::FORMATCODE_STRING32 => ByteStr::decode_with_format(input, format).map(|(i, o)| (i, MessageId::String(o))),
+            _ => Err(ErrorKind::Custom(codec::INVALID_FORMATCODE).into())
         }
     }
 }

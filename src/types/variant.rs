@@ -4,6 +4,7 @@ use types::{ByteStr, Symbol};
 use uuid::Uuid;
 use ordered_float::OrderedFloat;
 use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 
 /// Represents an AMQP type for use in polymorphic collections
 #[derive(Debug, Eq, PartialEq, Hash, Clone)]
@@ -69,7 +70,22 @@ pub enum Variant {
     Symbol(Symbol),
 
     /// Map
-    Map(HashMap<Variant, Variant>)
+    Map(VariantMap)
+}
+
+#[derive(PartialEq, Eq, Clone, Debug)]
+pub struct VariantMap { pub map: HashMap<Variant, Variant> }
+
+impl VariantMap {
+    pub fn new(map: HashMap<Variant, Variant>) -> VariantMap {
+        VariantMap { map }
+    }
+}
+
+impl Hash for VariantMap {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        unimplemented!()
+    }
 }
 
 #[cfg(test)]

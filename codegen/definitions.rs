@@ -7,9 +7,9 @@ pub enum {{provide.name}} {
 {{/each}}
 }
 
-impl Decode for {{provide.name}} {
-    fn decode(input: &[u8]) -> Result<(&[u8], Self)> {
-        let (input, descriptor) = Descriptor::decode(input)?;
+impl DecodeFormatted for {{provide.name}} {
+    fn decode_with_format(input: &[u8], fmt: u8) -> Result<(&[u8], Self)> {
+        let (input, descriptor) = Descriptor::decode_with_format(input, fmt)?;
         match descriptor {
             {{#each provide.options as |option|}}
             Descriptor::Ulong({{option.descriptor.code}}) => {{option.ty}}::decode(input).map(|(i, r)| (i, {{provide.name}}::{{option.ty}}(r))),
@@ -87,9 +87,8 @@ impl {{list.name}} {
     {{/each}}
 }
 
-impl Decode for {{list.name}} {
-    fn decode(input: &[u8]) -> Result<(&[u8], Self)> {
-        let (input, fmt) = decode_format_code(input)?;
+impl DecodeFormatted for {{list.name}} {
+    fn decode_with_format(input: &[u8], format: u8) -> Result<(&[u8], Self)> {
         let (input, header) = decode_list_header(input, format)?;
         let mut count = header.count;
         let mut input = input;
@@ -109,13 +108,13 @@ impl Decode for {{list.name}} {
         let {{field.name}}: {{field.ty}};
         if count > 0 {
             {{#if field.default}}
-            let decoded = Option::<{{field.ty}}>::decode(input)?;
-            {{field.name}} = decoded.1.unwrap_or({{field.default}});
+            let (in1, decoded) = Option::<{{field.ty}}>::decode(input)?;
+            {{field.name}} = decoded.unwrap_or({{field.default}});
             {{else}}
-            let decoded = {{field.ty}}::decode(input)?;
-            {{field.name}} = decoded.1;
+            let (in1, decoded) = {{field.ty}}::decode(input)?;
+            {{field.name}} = decoded;
             {{/if}}
-            input = decoded.0;
+            input = in1;
             count -= 1;
         }
         else {
@@ -127,7 +126,12 @@ impl Decode for {{list.name}} {
         }
         {{/if}}
         {{/each}}
-        Err("nope".into())
+        Ok((input, {{list.name}} {
+        {{#each list.fields as |field|}}
+        {{field.name}},
+        {{/each}}
+        }))
+        // Err("nope".into())
     }
 }
 

@@ -4,254 +4,352 @@ use bytes::{BigEndian, ByteOrder, Bytes};
 use chrono::{DateTime, TimeZone, Utc};
 use codec::{self, DecodeFormatted, Decode};
 use framing::{AmqpFrame, Frame, HEADER_LEN};
-use nom::{ErrorKind, IResult, be_f32, be_f64, be_i16, be_i32, be_i64, be_i8, be_u16, be_u32, be_u64, be_u8};
-use types::{ByteStr, Descriptor, Symbol, Variant};
+use nom::ErrorKind;
+use types::{ByteStr, Descriptor, Symbol, Variant, VariantMap};
 use uuid::Uuid;
 use ordered_float::OrderedFloat;
 use protocol::{self, CompoundHeader};
 use std::collections::HashMap;
-use errors::{Result, into_iresult};
+use errors::{Result, into_result};
 use std::hash::Hash;
 
 pub const INVALID_FRAME: u32 = 0x0001;
 pub const INVALID_FORMATCODE: u32 = 0x0002;
 pub const INVALID_DESCRIPTOR: u32 = 0x0003;
 
-macro_rules! error_if (
-  ($i:expr, $cond:expr, $code:expr) => (
-    {
-      if $cond {
-        IResult::Error(error_code!(ErrorKind::Custom($code)))
-      } else {
-        IResult::Done($i, ())
-      }
-    }
-  );
-  ($i:expr, $cond:expr, $err:expr) => (
-    error!($i, $cond, $err);
-  );
-);
+macro_rules! be_read {
+    ($input:ident, $fn:ident, $size:expr) => {
+        {
+            decode_check_len!($input, $size);
+            let x = BigEndian::$fn($input);
+            Ok((&$input[$size..], x))
+        }    
+    };
+}
+
+fn read_u8(input: &[u8]) -> Result<(&[u8], u8)> {
+    decode_check_len!(input, 1);
+    Ok((&input[1..], input[0]))
+}
+
+fn read_i8(input: &[u8]) -> Result<(&[u8], i8)> {
+    decode_check_len!(input, 1);
+    Ok((&input[1..], input[0] as i8))
+}
+
+fn read_bytes_u8(input: &[u8]) -> Result<(&[u8], &[u8])> {
+    let len: u8;
+    let a = read_u8(input)?;
+    let input = a.0;
+    let len = a.1 as usize;
+    decode_check_len!(input, len);
+    Ok(input.split_at(len))
+}
+
+fn read_bytes_u32(input: &[u8]) -> Result<(&[u8], &[u8])> {
+    let result: Result<(&[u8], u32)> = be_read!(input, read_u32, 4);
+    let (input, len) = result?;
+    let len = len as usize;
+    decode_check_len!(input, len);
+    Ok(input.split_at(len))
+}
 
 #[macro_export]
 macro_rules! validate_code (
-  ($format:ident, $code:expr) => (
+  ($fmt:ident, $code:expr) => (
     {
-      if $format != $code {
-        return IResult::Error(error_code!(ErrorKind::Custom(::codec::INVALID_FORMATCODE)));
+      if $fmt != $code {
+        return Err(ErrorKind::Custom(::codec::INVALID_FORMATCODE).into());
       }
     }
   );
 );
 
 impl DecodeFormatted for bool {
-    named_args!(decode_with_format(format: u8) <bool>, switch!(value!(format),
-            codec::FORMATCODE_BOOLEAN => map!(be_u8, |b| b != 0) |
-            codec::FORMATCODE_BOOLEAN_TRUE => value!(true) |
-            codec::FORMATCODE_BOOLEAN_FALSE => value!(false)
-        )
-    );
+    fn decode_with_format(input: &[u8], fmt: u8) -> Result<(&[u8], Self)> {
+        match fmt {
+            codec::FORMATCODE_BOOLEAN => read_u8(input).map(|(i, o)| (i, o != 0)),
+            codec::FORMATCODE_BOOLEAN_TRUE => Ok((input, true)),
+            codec::FORMATCODE_BOOLEAN_FALSE => Ok((input, false)),
+            _ => Err(ErrorKind::Custom(INVALID_FORMATCODE).into())
+        }
+    }
 }
 
 impl DecodeFormatted for u8 {
-    fn decode_with_format(input: &[u8], format: u8) -> IResult<&[u8], u8> {
-        validate_code!(format, codec::FORMATCODE_UBYTE);
-        be_u8(input)
+    fn decode_with_format(input: &[u8], fmt: u8) -> Result<(&[u8], Self)> {
+        validate_code!(fmt, codec::FORMATCODE_UBYTE);
+        read_u8(input)
     }
 }
 
 impl DecodeFormatted for u16 {
-    fn decode_with_format(input: &[u8], format: u8) -> IResult<&[u8], u16> {
-        validate_code!(format, codec::FORMATCODE_USHORT);
-        be_u16(input)
+    fn decode_with_format(input: &[u8], fmt: u8) -> Result<(&[u8], Self)> {
+        validate_code!(fmt, codec::FORMATCODE_USHORT);
+        be_read!(input, read_u16, 2)
     }
 }
 
 impl DecodeFormatted for u32 {
-    named_args!(decode_with_format(format: u8) <u32>, switch!(value!(format),
-        codec::FORMATCODE_UINT => call!(be_u32) |
-        codec::FORMATCODE_SMALLUINT => map!(be_u8, |v| v as u32) |
-        codec::FORMATCODE_UINT_0 => value!(0)
-    ));
+    fn decode_with_format(input: &[u8], fmt: u8) -> Result<(&[u8], Self)> {
+        match fmt {
+            codec::FORMATCODE_UINT => be_read!(input, read_u32, 4),
+            codec::FORMATCODE_SMALLUINT => read_u8(input).map(|(i, o)| (i, o as u32)),
+            codec::FORMATCODE_UINT_0 => Ok((input, 0)),
+            _ => Err(ErrorKind::Custom(INVALID_FORMATCODE).into())
+        }
+    }
 }
 
 impl DecodeFormatted for u64 {
-    named_args!(decode_with_format(format: u8) <u64>, switch!(value!(format),
-        codec::FORMATCODE_ULONG => call!(be_u64) |
-        codec::FORMATCODE_SMALLULONG => map!(be_u8, |v| v as u64) |
-        codec::FORMATCODE_ULONG_0 => value!(0)
-    ));
+    fn decode_with_format(input: &[u8], fmt: u8) -> Result<(&[u8], Self)> {
+        match fmt {
+            codec::FORMATCODE_ULONG => be_read!(input, read_u64, 8),
+            codec::FORMATCODE_SMALLULONG => read_u8(input).map(|(i, o)| (i, o as u64)),
+            codec::FORMATCODE_ULONG_0 => Ok((input, 0)),
+            _ => Err(ErrorKind::Custom(INVALID_FORMATCODE).into())
+        }
+    }
 }
 
 impl DecodeFormatted for i8 {
-    fn decode_with_format(input: &[u8], format: u8) -> IResult<&[u8], i8> {
-        validate_code!(format, codec::FORMATCODE_BYTE);
-        be_i8(input)
+    fn decode_with_format(input: &[u8], fmt: u8) -> Result<(&[u8], Self)> {
+        validate_code!(fmt, codec::FORMATCODE_BYTE);
+        read_i8(input)
     }
 }
 
 impl DecodeFormatted for i16 {
-    fn decode_with_format(input: &[u8], format: u8) -> IResult<&[u8], i16> {
-        validate_code!(format, codec::FORMATCODE_SHORT);
-        be_i16(input)
+    fn decode_with_format(input: &[u8], fmt: u8) -> Result<(&[u8], Self)> {
+        validate_code!(fmt, codec::FORMATCODE_SHORT);
+        be_read!(input, read_i16, 2)
     }
 }
 
 impl DecodeFormatted for i32 {
-    // todo: hand-roll?
-    // fn decode_with_format(input: &[u8], format: u8) -> IResult<&[u8], i32> {
-    //     match format {
-    //         codec::FORMATCODE_INT => be_i32(input),
-    //         codec::FORMATCODE_SMALLINT => map!(input, be_i8, |v| v as i32),
-    //         _ => IResult::Error(error_code!(ErrorKind::Custom(INVALID_FORMATCODE)))
-    //     }
-    // }
-
-    named_args!(decode_with_format(format: u8) <i32>, switch!(value!(format),
-        codec::FORMATCODE_INT => call!(be_i32) |
-        codec::FORMATCODE_SMALLINT => map!(be_i8, |v| v as i32)
-    ));
+    fn decode_with_format(input: &[u8], fmt: u8) -> Result<(&[u8], Self)> {
+        match fmt {
+            codec::FORMATCODE_INT => be_read!(input, read_i32, 4),
+            codec::FORMATCODE_SMALLINT => read_i8(input).map(|(i, o)| (i, o as i32)),
+            _ => Err(ErrorKind::Custom(INVALID_FORMATCODE).into())
+        }
+    }
 }
 
 impl DecodeFormatted for i64 {
-    named_args!(decode_with_format(format: u8) <i64>, switch!(value!(format),
-        codec::FORMATCODE_LONG => call!(be_i64) |
-        codec::FORMATCODE_SMALLLONG => map!(be_i8, |v| v as i64)
-    ));
+    fn decode_with_format(input: &[u8], fmt: u8) -> Result<(&[u8], Self)> {
+        match fmt {
+            codec::FORMATCODE_LONG => be_read!(input, read_i64, 8),
+            codec::FORMATCODE_SMALLLONG => read_i8(input).map(|(i, o)| (i, o as i64)),
+            _ => Err(ErrorKind::Custom(INVALID_FORMATCODE).into())
+        }
+    }
 }
 
 impl DecodeFormatted for f32 {
-    fn decode_with_format(input: &[u8], format: u8) -> IResult<&[u8], f32> {
-        validate_code!(format, codec::FORMATCODE_FLOAT);
-        be_f32(input)
+    fn decode_with_format(input: &[u8], fmt: u8) -> Result<(&[u8], Self)> {
+        validate_code!(fmt, codec::FORMATCODE_FLOAT);
+        be_read!(input, read_f32, 4)
     }
 }
 
 impl DecodeFormatted for f64 {
-    fn decode_with_format(input: &[u8], format: u8) -> IResult<&[u8], f64> {
-        validate_code!(format, codec::FORMATCODE_DOUBLE);
-        be_f64(input)
+    fn decode_with_format(input: &[u8], fmt: u8) -> Result<(&[u8], Self)> {
+        validate_code!(fmt, codec::FORMATCODE_DOUBLE);
+        be_read!(input, read_f64, 8)
     }
 }
 
 impl DecodeFormatted for char {
-    fn decode_with_format(input: &[u8], format: u8) -> IResult<&[u8], char> {
-        validate_code!(format, codec::FORMATCODE_CHAR);
-        map_opt!(input, be_u32, |c| char::from_u32(c))
+    fn decode_with_format(input: &[u8], fmt: u8) -> Result<(&[u8], Self)> {
+        validate_code!(fmt, codec::FORMATCODE_CHAR);
+        let result: Result<(&[u8], u32)> = be_read!(input, read_u32, 4);
+        let (i, o) = result?;
+        if let Some(c) = char::from_u32(o) { Ok((i, c)) } else { Err(ErrorKind::MapOpt.into()) }
     }
 }
 
 impl DecodeFormatted for DateTime<Utc> {
-    fn decode_with_format(input: &[u8], format: u8) -> IResult<&[u8], DateTime<Utc>> {
-        validate_code!(format, codec::FORMATCODE_TIMESTAMP);
-        map!(input, be_i64, |ts| datetime_from_millis(ts))
+    fn decode_with_format(input: &[u8], fmt: u8) -> Result<(&[u8], Self)> {
+        validate_code!(fmt, codec::FORMATCODE_TIMESTAMP);
+        be_read!(input, read_i64, 8).map(|(i, o)| (i, datetime_from_millis(o)))
     }
 }
 
 impl DecodeFormatted for Uuid {
-    fn decode_with_format(input: &[u8], format: u8) -> IResult<&[u8], Uuid> {
-        validate_code!(format, codec::FORMATCODE_UUID);
-        map_res!(input, take!(16), Uuid::from_bytes)
+    fn decode_with_format(input: &[u8], fmt: u8) -> Result<(&[u8], Self)> {
+        validate_code!(fmt, codec::FORMATCODE_UUID);
+        decode_check_len!(input, 16);
+        let uuid = Uuid::from_bytes(&input[..16])?;
+        Ok((&input[16..], uuid))
     }
 }
 
 impl DecodeFormatted for Bytes {
-    named_args!(decode_with_format(format: u8) <Bytes>, switch!(value!(format),
-        codec::FORMATCODE_BINARY8 => map!(length_bytes!(be_u8), |v| Bytes::from(v)) |
-        codec::FORMATCODE_BINARY32 => map!(length_bytes!(be_u32), |v| Bytes::from(v))
-    ));
+    fn decode_with_format(input: &[u8], fmt: u8) -> Result<(&[u8], Self)> {
+        match fmt {
+            codec::FORMATCODE_BINARY8 => read_bytes_u8(input).map(|(i, o)| (i, Bytes::from(o))),
+            codec::FORMATCODE_BINARY32 => read_bytes_u32(input).map(|(i, o)| (i, Bytes::from(o))),
+            _ => Err(ErrorKind::Custom(INVALID_FORMATCODE).into())
+        }
+    }
 }
 
 impl DecodeFormatted for ByteStr {
-    named_args!(decode_with_format(format: u8) <ByteStr>, switch!(value!(format),
-        codec::FORMATCODE_STRING8 => map_res!(length_bytes!(be_u8), |v| str::from_utf8(v).map(|s| ByteStr::from(s))) |
-        codec::FORMATCODE_STRING32 => map_res!(length_bytes!(be_u32), |v| str::from_utf8(v).map(|s| ByteStr::from(s)))
-    ));
+    fn decode_with_format(input: &[u8], fmt: u8) -> Result<(&[u8], Self)> {
+        match fmt {
+            codec::FORMATCODE_STRING8 => {
+                let (input, bytes) = read_bytes_u8(input)?;
+                Ok((input, ByteStr::from(str::from_utf8(bytes)?)))
+            },
+            codec::FORMATCODE_STRING32 => {
+                let (input, bytes) = read_bytes_u32(input)?;
+                Ok((input, ByteStr::from(str::from_utf8(bytes)?)))
+            },
+            _ => Err(ErrorKind::Custom(INVALID_FORMATCODE).into())
+        }
+    }
 }
 
 impl DecodeFormatted for Symbol {
-    named_args!(decode_with_format(format: u8) <Symbol>, switch!(value!(format),
-        codec::FORMATCODE_SYMBOL8 => map_res!(length_bytes!(be_u8), |v| str::from_utf8(v).map(|s| Symbol::from(s))) |
-        codec::FORMATCODE_SYMBOL32 => map_res!(length_bytes!(be_u32), |v| str::from_utf8(v).map(|s| Symbol::from(s)))
-    ));
+    fn decode_with_format(input: &[u8], fmt: u8) -> Result<(&[u8], Self)> {
+        match fmt {
+            codec::FORMATCODE_SYMBOL8 => {
+                let (input, bytes) = read_bytes_u8(input)?;
+                Ok((input, Symbol::from(str::from_utf8(bytes)?)))
+            },
+            codec::FORMATCODE_SYMBOL32 => {
+                let (input, bytes) = read_bytes_u32(input)?;
+                Ok((input, Symbol::from(str::from_utf8(bytes)?)))
+            },
+            _ => Err(ErrorKind::Custom(INVALID_FORMATCODE).into())
+        }
+    }
 }
 
 impl<K: Decode + Eq + Hash, V: Decode> DecodeFormatted for HashMap<K, V> {
-    fn decode_with_format(input: &[u8], format: u8) -> IResult<&[u8], HashMap<K, V>> {
-        into_iresult(decode_map_with_format(input, format))
+    fn decode_with_format(input: &[u8], fmt: u8) -> Result<(&[u8], Self)> {
+        let (input, header) = decode_map_header(input, fmt)?;
+        let mut map_input = &input[..header.size as usize];
+        let count = header.count / 2;
+        let mut map: HashMap<K, V> = HashMap::with_capacity(count as usize);
+        for i in 0..count {
+            let (input1, key) = K::decode(map_input)?;
+            let (input2, value) = V::decode(map_input)?;
+            map_input = input2;
+            map.insert(key, value); // todo: ensure None returned?
+        }
+        // todo: validate map_input is empty
+        Ok((&input[header.size as usize..], map))
     }
 }
-fn decode_map_with_format<K: Decode + Eq + Hash, V: Decode>(input: &[u8], format: u8) -> Result<(&[u8], HashMap<K, V>)> {
-    let (input, header) = decode_map_header(input, format)?;
-    let mut map_input = &input[..header.size as usize];
-    let count = header.count / 2;
-    let mut map: HashMap<K, V> = HashMap::with_capacity(count as usize);
-    for i in 0..count {
-        let (input1, key) = K::decode(map_input)?;
-        let (input2, value) = V::decode(map_input)?;
-        map_input = input2;
-        map.insert(key, value); // todo: ensure None returned?
+
+impl<T: DecodeFormatted> DecodeFormatted for Vec<T> {
+    fn decode_with_format(input: &[u8], fmt: u8) -> Result<(&[u8], Self)> {
+        let size: usize;
+        let count: usize;
+        let mut arr_input: &[u8];
+        let remainder: &[u8];
+        match fmt {
+            codec::FORMATCODE_ARRAY8 => {
+                decode_check_len!(input, 2);
+                size = input[0] as usize;
+                count = input[1] as usize;
+                decode_check_len!(input, size);
+                let split_in = input.split_at(size);
+                arr_input = &split_in.0[2..];
+                remainder = split_in.1;
+            },
+            codec::FORMATCODE_ARRAY32 =>{
+                decode_check_len!(input, 8);
+                size = BigEndian::read_u32(input) as usize;
+                count = BigEndian::read_u32(&input[4..]) as usize;
+                let split_in = input.split_at(size);
+                arr_input = &split_in.0[8..];
+                remainder = split_in.1;
+            },
+            _ => {
+                return Err(ErrorKind::Custom(INVALID_FORMATCODE).into());
+            }
+        }
+        let item_fmt = arr_input[0];
+        arr_input = &arr_input[1..];
+        let mut result: Vec<T> = Vec::with_capacity(count);
+        for _ in 0..count {
+            let (new_input, decoded) = T::decode_with_format(arr_input, item_fmt)?;
+            result.push(decoded);
+            arr_input = new_input;
+        }
+        Ok((remainder, result))
     }
-    // todo: validate map_input is empty
-    Ok((&input[header.size as usize..], map))
 }
 
 impl DecodeFormatted for Variant {
-    named_args!(decode_with_format(format: u8) <Variant>, switch!(value!(format),
-        codec::FORMATCODE_NULL => value!(Variant::Null) |
-        codec::FORMATCODE_BOOLEAN => map!(call!(bool::decode_with_format, format), Variant::Boolean) |
-        codec::FORMATCODE_BOOLEAN_FALSE => value!(Variant::Boolean(false)) |
-        codec::FORMATCODE_BOOLEAN_TRUE => value!(Variant::Boolean(true)) |
-        codec::FORMATCODE_UINT_0 => value!(Variant::Uint(0)) |
-        codec::FORMATCODE_ULONG_0 => value!(Variant::Ulong(0)) |
-        codec::FORMATCODE_UBYTE => map!(call!(u8::decode_with_format, format), Variant::Ubyte) |
-        codec::FORMATCODE_USHORT => map!(call!(u16::decode_with_format, format), Variant::Ushort) |
-        codec::FORMATCODE_UINT => map!(call!(u32::decode_with_format, format), Variant::Uint) |
-        codec::FORMATCODE_ULONG => map!(call!(u64::decode_with_format, format), Variant::Ulong) |
-        codec::FORMATCODE_BYTE => map!(call!(i8::decode_with_format, format), Variant::Byte) |
-        codec::FORMATCODE_SHORT => map!(call!(i16::decode_with_format, format), Variant::Short) |
-        codec::FORMATCODE_INT => map!(call!(i32::decode_with_format, format), Variant::Int) |
-        codec::FORMATCODE_LONG => map!(call!(i64::decode_with_format, format), Variant::Long) |
-        codec::FORMATCODE_SMALLUINT => map!(call!(u32::decode_with_format, format), Variant::Uint) |
-        codec::FORMATCODE_SMALLULONG => map!(call!(u64::decode_with_format, format), Variant::Ulong) |
-        codec::FORMATCODE_SMALLINT => map!(call!(i32::decode_with_format, format), Variant::Int) |
-        codec::FORMATCODE_SMALLLONG => map!(call!(i64::decode_with_format, format), Variant::Long) |
-        codec::FORMATCODE_FLOAT => map!(call!(f32::decode_with_format, format), |v| Variant::Float(OrderedFloat(v))) |
-        codec::FORMATCODE_DOUBLE => map!(call!(f64::decode_with_format, format), |v| Variant::Double(OrderedFloat(v))) |
-        // codec::FORMATCODE_DECIMAL32 => map!(call!(x::decode_with_format, format), Variant::X) |
-        // codec::FORMATCODE_DECIMAL64 => map!(call!(x::decode_with_format, format), Variant::X) |
-        // codec::FORMATCODE_DECIMAL128 => map!(call!(x::decode_with_format, format), Variant::X) |
-        codec::FORMATCODE_CHAR => map!(call!(char::decode_with_format, format), Variant::Char) |
-        codec::FORMATCODE_TIMESTAMP => map!(call!(DateTime::<Utc>::decode_with_format, format), Variant::Timestamp) |
-        codec::FORMATCODE_UUID => map!(call!(Uuid::decode_with_format, format), Variant::Uuid) |
-        codec::FORMATCODE_BINARY8 => map!(call!(Bytes::decode_with_format, format), Variant::Binary) |
-        codec::FORMATCODE_BINARY32 => map!(call!(Bytes::decode_with_format, format), Variant::Binary) |
-        codec::FORMATCODE_STRING8 => map!(call!(ByteStr::decode_with_format, format), Variant::String) |
-        codec::FORMATCODE_STRING32 => map!(call!(ByteStr::decode_with_format, format), Variant::String) |
-        codec::FORMATCODE_SYMBOL8 => map!(call!(Symbol::decode_with_format, format), Variant::Symbol) |
-        codec::FORMATCODE_SYMBOL32 => map!(call!(Symbol::decode_with_format, format), Variant::Symbol) |
-        // codec::FORMATCODE_LIST0 => map!(call!(x::decode_with_format, format), Variant::X) |
-        // codec::FORMATCODE_LIST8 => map!(call!(x::decode_with_format, format), Variant::X) |
-        // codec::FORMATCODE_LIST32 => map!(call!(x::decode_with_format, format), Variant::X) |
-        codec::FORMATCODE_MAP8 => map!(call!(HashMap::<Variant, Variant>::decode_with_format, format), Variant::Map) |
-        codec::FORMATCODE_MAP32 => map!(call!(HashMap::<Variant, Variant>::decode_with_format, format), Variant::Map)
-        // codec::FORMATCODE_ARRAY8 => map!(call!(x::decode_with_format, format), Variant::X) |
-        // codec::FORMATCODE_ARRAY32 => map!(call!(x::decode_with_format, format), Variant::X) |
-    ));
+    fn decode_with_format(input: &[u8], fmt: u8) -> Result<(&[u8], Self)> {
+        match fmt {
+            codec::FORMATCODE_NULL => Ok((input, Variant::Null)),
+            codec::FORMATCODE_BOOLEAN => bool::decode_with_format(input, fmt).map(|(i, o)| (i, Variant::Boolean(o))),
+            codec::FORMATCODE_BOOLEAN_FALSE => Ok((input, Variant::Boolean(false))),
+            codec::FORMATCODE_BOOLEAN_TRUE => Ok((input, Variant::Boolean(true))),
+            codec::FORMATCODE_UINT_0 => Ok((input, Variant::Uint(0))),
+            codec::FORMATCODE_ULONG_0 => Ok((input, Variant::Ulong(0))),
+            codec::FORMATCODE_UBYTE => u8::decode_with_format(input, fmt).map(|(i, o)| (i, Variant::Ubyte(o))),
+            codec::FORMATCODE_USHORT => u16::decode_with_format(input, fmt).map(|(i, o)| (i, Variant::Ushort(o))),
+            codec::FORMATCODE_UINT => u32::decode_with_format(input, fmt).map(|(i, o)| (i, Variant::Uint(o))),
+            codec::FORMATCODE_ULONG => u64::decode_with_format(input, fmt).map(|(i, o)| (i, Variant::Ulong(o))),
+            codec::FORMATCODE_BYTE => i8::decode_with_format(input, fmt).map(|(i, o)| (i, Variant::Byte(o))),
+            codec::FORMATCODE_SHORT => i16::decode_with_format(input, fmt).map(|(i, o)| (i, Variant::Short(o))),
+            codec::FORMATCODE_INT => i32::decode_with_format(input, fmt).map(|(i, o)| (i, Variant::Int(o))),
+            codec::FORMATCODE_LONG => i64::decode_with_format(input, fmt).map(|(i, o)| (i, Variant::Long(o))),
+            codec::FORMATCODE_SMALLUINT => u32::decode_with_format(input, fmt).map(|(i, o)| (i, Variant::Uint(o))),
+            codec::FORMATCODE_SMALLULONG => u64::decode_with_format(input, fmt).map(|(i, o)| (i, Variant::Ulong(o))),
+            codec::FORMATCODE_SMALLINT => i32::decode_with_format(input, fmt).map(|(i, o)| (i, Variant::Int(o))),
+            codec::FORMATCODE_SMALLLONG => i64::decode_with_format(input, fmt).map(|(i, o)| (i, Variant::Long(o))),
+            codec::FORMATCODE_FLOAT => f32::decode_with_format(input, fmt).map(|(i, o)| (i, Variant::Float(OrderedFloat(o)))),
+            codec::FORMATCODE_DOUBLE => f64::decode_with_format(input, fmt).map(|(i, o)| (i, Variant::Double(OrderedFloat(o)))),
+            // codec::FORMATCODE_DECIMAL32 => x::decode_with_format(input, fmt).map(|(i, o)| (i, Variant::Decimal(o))),
+            // codec::FORMATCODE_DECIMAL64 => x::decode_with_format(input, fmt).map(|(i, o)| (i, Variant::Decimal(o))),
+            // codec::FORMATCODE_DECIMAL128 => x::decode_with_format(input, fmt).map(|(i, o)| (i, Variant::Decimal(o))),
+            codec::FORMATCODE_CHAR => char::decode_with_format(input, fmt).map(|(i, o)| (i, Variant::Char(o))),
+            codec::FORMATCODE_TIMESTAMP => DateTime::<Utc>::decode_with_format(input, fmt).map(|(i, o)| (i, Variant::Timestamp(o))),
+            codec::FORMATCODE_UUID => Uuid::decode_with_format(input, fmt).map(|(i, o)| (i, Variant::Uuid(o))),
+            codec::FORMATCODE_BINARY8 => Bytes::decode_with_format(input, fmt).map(|(i, o)| (i, Variant::Binary(o))),
+            codec::FORMATCODE_BINARY32 => Bytes::decode_with_format(input, fmt).map(|(i, o)| (i, Variant::Binary(o))),
+            codec::FORMATCODE_STRING8 => ByteStr::decode_with_format(input, fmt).map(|(i, o)| (i, Variant::String(o))),
+            codec::FORMATCODE_STRING32 => ByteStr::decode_with_format(input, fmt).map(|(i, o)| (i, Variant::String(o))),
+            codec::FORMATCODE_SYMBOL8 => Symbol::decode_with_format(input, fmt).map(|(i, o)| (i, Variant::Symbol(o))),
+            codec::FORMATCODE_SYMBOL32 => Symbol::decode_with_format(input, fmt).map(|(i, o)| (i, Variant::Symbol(o))),
+            // codec::FORMATCODE_LIST0 => x::decode_with_format(input, fmt).map(|(i, o)| (i, Variant::List(o))),
+            // codec::FORMATCODE_LIST8 => x::decode_with_format(input, fmt).map(|(i, o)| (i, Variant::List(o))),
+            // codec::FORMATCODE_LIST32 => x::decode_with_format(input, fmt).map(|(i, o)| (i, Variant::List(o))),
+            codec::FORMATCODE_MAP8 => HashMap::<Variant, Variant>::decode_with_format(input, fmt).map(|(i, o)| (i, Variant::Map(VariantMap::new(o)))),
+            codec::FORMATCODE_MAP32 => HashMap::<Variant, Variant>::decode_with_format(input, fmt).map(|(i, o)| (i, Variant::Map(VariantMap::new(o)))),
+            // codec::FORMATCODE_ARRAY8 => x::decode_with_format(input, fmt).map(|(i, o)| (i, Variant::Array(o))),
+            // codec::FORMATCODE_ARRAY32 => x::decode_with_format(input, fmt).map(|(i, o)| (i, Variant::Array(o))),
+            _ => Err(ErrorKind::Custom(INVALID_FORMATCODE).into())
+        }
+    }
 }
 
 impl<T: DecodeFormatted> DecodeFormatted for Option<T> {
-    named_args!(decode_with_format(format: u8) <Option<T>>, switch!(value!(format),
-    codec::FORMATCODE_NULL => value!(None) |
-    _ => map!(call!(T::decode_with_format, format), |v| Some(v))));
+    fn decode_with_format(input: &[u8], fmt: u8) -> Result<(&[u8], Self)> {
+        match fmt {
+            codec::FORMATCODE_NULL => Ok((input, None)),
+            _ => T::decode_with_format(input, fmt).map(|(i, o)| (i, Some(o)))
+        }
+    }
 }
 
 impl DecodeFormatted for Descriptor {
-    named_args!(decode_with_format(format: u8) <Descriptor>, switch!(value!(format),
-       codec::FORMATCODE_SMALLULONG => map!(call!(u64::decode_with_format, format), Descriptor::Ulong) |
-       codec::FORMATCODE_ULONG => map!(call!(u64::decode_with_format, format), Descriptor::Ulong) |
-       codec::FORMATCODE_SYMBOL8 => map!(call!(Symbol::decode_with_format, format), Descriptor::Symbol) |
-       codec::FORMATCODE_SYMBOL32 => map!(call!(Symbol::decode_with_format, format), Descriptor::Symbol)
-    ));
+    fn decode_with_format(input: &[u8], fmt: u8) -> Result<(&[u8], Self)> {
+        match fmt {
+            codec::FORMATCODE_SMALLULONG => u64::decode_with_format(input, fmt).map(|(i, o)| (i, Descriptor::Ulong(o))),
+            codec::FORMATCODE_ULONG => u64::decode_with_format(input, fmt).map(|(i, o)| (i, Descriptor::Ulong(o))),
+            codec::FORMATCODE_SYMBOL8 => Symbol::decode_with_format(input, fmt).map(|(i, o)| (i, Descriptor::Symbol(o))),
+            codec::FORMATCODE_SYMBOL32 => Symbol::decode_with_format(input, fmt).map(|(i, o)| (i, Descriptor::Symbol(o))),
+            _ => Err(ErrorKind::Custom(INVALID_FORMATCODE).into())
+        }
+    }
 }
 
 fn decode_amqp_frame(input: &[u8], doff: u8) -> Result<(&[u8], Frame)> {
@@ -277,30 +375,31 @@ impl Decode for Frame {
     }
 }
 
-pub fn decode_list_header(input: &[u8], format: u8) -> Result<(&[u8], CompoundHeader)> {
-    match format {
+pub(crate) fn decode_list_header(input: &[u8], fmt: u8) -> Result<(&[u8], CompoundHeader)> {
+    match fmt {
         codec::FORMATCODE_LIST0 => Ok((input, CompoundHeader::empty())),
         codec::FORMATCODE_LIST8 => decode_compound8(input),
         codec::FORMATCODE_LIST32 => decode_compound32(input),
         _ => Err(ErrorKind::Custom(INVALID_FORMATCODE).into()),
     }
 }
-pub fn decode_map_header(input: &[u8], format: u8) -> Result<(&[u8], CompoundHeader)> {
-    match format {
+
+pub(crate) fn decode_map_header(input: &[u8], fmt: u8) -> Result<(&[u8], CompoundHeader)> {
+    match fmt {
         codec::FORMATCODE_MAP8 => decode_compound8(input),
         codec::FORMATCODE_MAP32 => decode_compound32(input),
         _ => Err(ErrorKind::Custom(INVALID_FORMATCODE).into()),
     }
 }
 
-pub fn decode_compound8(input: &[u8]) -> Result<(&[u8], CompoundHeader)> {
+fn decode_compound8(input: &[u8]) -> Result<(&[u8], CompoundHeader)> {
     decode_check_len!(input, 2);
     let size = input[0];
     let count = input[1];
     Ok((&input[2..], CompoundHeader {size: size as u32, count: count as u32}))
 }
 
-pub fn decode_compound32(input: &[u8]) -> Result<(&[u8], CompoundHeader)> {
+fn decode_compound32(input: &[u8]) -> Result<(&[u8], CompoundHeader)> {
     decode_check_len!(input, 8);
     let size = BigEndian::read_u32(input);
     let count = BigEndian::read_u32(&input[4..]);

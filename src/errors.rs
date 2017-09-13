@@ -10,6 +10,8 @@ error_chain!{
     foreign_links{
         Io(::std::io::Error);
         NomError(::nom::ErrorKind);
+        UuidParseError(::uuid::ParseError);
+        Utf8Error(::std::str::Utf8Error);
     }
 }
 

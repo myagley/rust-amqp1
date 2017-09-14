@@ -272,7 +272,7 @@ impl<T: DecodeFormatted> DecodeFormatted for Vec<T> {
                 return Err(ErrorKind::Custom(INVALID_FORMATCODE).into());
             }
         }
-        let item_fmt = arr_input[0];
+        let item_fmt = arr_input[0]; // todo: support descriptor
         arr_input = &arr_input[1..];
         let mut result: Vec<T> = Vec::with_capacity(count);
         for _ in 0..count {

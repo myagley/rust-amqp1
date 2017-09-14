@@ -142,6 +142,7 @@ pub struct Enum {
     ty: String,
     provides: Vec<String>,
     items: Vec<EnumItem>,
+    is_symbol: bool
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -242,10 +243,12 @@ impl Alias {
 
 impl Enum {
     fn from(e: _Enum) -> Enum {
+        let ty = get_type_name(&*e.source, None);
         Enum {
             name: camel_case(&*e.name),
-            ty: get_type_name(&*e.source, None),
+            ty: ty.clone(),
             provides: parse_provides(e.provides),
+            is_symbol: ty == "Symbol",
             items: e.choice
                 .into_iter()
                 .map(|c| {

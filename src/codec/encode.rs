@@ -4,7 +4,7 @@ use bytes::{BigEndian, BufMut, Bytes, BytesMut};
 use chrono::{DateTime, Utc};
 use codec::{self, ArrayEncode, Encode};
 use framing::{self, AmqpFrame, Frame};
-use types::{ByteStr, Symbol, Variant};
+use types::{ByteStr, Descriptor, Symbol, Variant};
 use uuid::Uuid;
 use std::collections::HashMap;
 use std::hash::Hash;
@@ -412,23 +412,22 @@ impl ArrayEncode for Symbol {
 }
 
 fn map_encoded_size<K: Hash + Eq + Encode, V: Encode>(map: &HashMap<K, V>) -> usize {
-    map.iter().fold(0, |r, (k, v)| r + k.encoded_size() + v.encoded_size())
+    map.iter()
+        .fold(0, |r, (k, v)| r + k.encoded_size() + v.encoded_size())
 }
 impl<K: Eq + Hash + Encode, V: Encode> Encode for HashMap<K, V> {
     fn encoded_size(&self) -> usize {
         let count = self.len();
         let size = map_encoded_size(self);
-
-        // `size + 2` below assumes 8-bit size and count encoding
         // f:1 + s:4 + c:4 vs f:1 + s:1 + c:1
-        let preamble = if count * 2 > u8::MAX as usize || size + 2 > u8::MAX as usize { 9 } else { 3 };
+        let preamble = if size > u8::MAX as usize { 9 } else { 3 };
         preamble + size
     }
 
     fn encode(&self, buf: &mut BytesMut) {
         let count = self.len();
-        let size = self.encoded_size();
-        if size > u8::MAX as usize || count > u8::MAX as usize {
+        let size = map_encoded_size(self);
+        if size > u8::MAX as usize {
             buf.put_u8(codec::FORMATCODE_MAP32);
             buf.put_u32::<BigEndian>(size as u32);
             buf.put_u32::<BigEndian>(count as u32);
@@ -450,12 +449,41 @@ impl<K: Eq + Hash + Encode, V: Encode> ArrayEncode for HashMap<K, V> {
         8 + map_encoded_size(self)
     }
     fn array_encode(&self, buf: &mut BytesMut) {
-        buf.put_u32::<BigEndian>(self.len() as u32);
         buf.put_u32::<BigEndian>(self.encoded_size() as u32);
+        buf.put_u32::<BigEndian>(self.len() as u32);
 
         for (k, v) in self {
             k.encode(buf);
             v.encode(buf);
+        }
+    }
+}
+
+fn array_encoded_size<T: ArrayEncode>(vec: &Vec<T>) -> usize {
+    vec.iter().fold(0, |r, i| r + i.array_encoded_size())
+}
+impl<T: ArrayEncode> Encode for Vec<T> {
+    fn encoded_size(&self) -> usize {
+        let content_size = array_encoded_size(self);
+        1 // format code
+            + (if content_size > u8::MAX as usize { 8 } else { 2 }) // size + count
+            + 1 // item constructor -- todo: support described ctor?
+            + content_size
+    }
+
+    fn encode(&self, buf: &mut BytesMut) {
+        let size = self.encoded_size();
+        if size > u8::MAX as usize {
+            buf.put_u8(codec::FORMATCODE_ARRAY32);
+            buf.put_u32::<BigEndian>(size as u32);
+            buf.put_u32::<BigEndian>(self.len() as u32);
+        } else {
+            buf.put_u8(codec::FORMATCODE_ARRAY8);
+            buf.put_u8(size as u8);
+            buf.put_u8(self.len() as u8);
+        }
+        for i in self {
+            i.array_encode(buf);
         }
     }
 }
@@ -486,7 +514,7 @@ impl Encode for Variant {
     }
 
     /// Encodes `Variant` into provided `BytesMut`
-    fn encode(&self, buf: &mut BytesMut) -> () {
+    fn encode(&self, buf: &mut BytesMut) {
         match *self {
             Variant::Null => encode_null(buf),
             Variant::Boolean(b) => b.encode(buf),
@@ -516,10 +544,27 @@ impl<T: Encode> Encode for Option<T> {
         self.as_ref().map_or(1, |v| v.encoded_size())
     }
 
-    fn encode(&self, buf: &mut BytesMut) -> () {
+    fn encode(&self, buf: &mut BytesMut) {
         match *self {
             Some(ref e) => e.encode(buf),
             None => encode_null(buf),
+        }
+    }
+}
+
+impl Encode for Descriptor {
+    fn encoded_size(&self) -> usize {
+        match *self {
+            Descriptor::Ulong(v) => 1 + v.encoded_size(),
+            Descriptor::Symbol(v) => 1 + v.encoded_size(),
+        }
+    }
+
+    fn encode(&self, buf: &mut BytesMut) {
+        buf.put_u8(0x00);
+        match *self {
+            Descriptor::Ulong(v) => v.encode(buf),
+            Descriptor::Symbol(v) => v.encode(buf),
         }
     }
 }

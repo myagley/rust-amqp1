@@ -3,7 +3,7 @@ use super::errors::*;
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 use uuid::Uuid;
-use nom::{IResult, Needed, ErrorKind};
+use nom::{ErrorKind};
 use super::codec::{self, Decode, DecodeFormatted, Encode, decode_map_header, decode_list_header, INVALID_FORMATCODE};
 use super::types::*;
 
@@ -57,6 +57,8 @@ pub type Timestamp = DateTime<Utc>;
 pub type Symbols = Vec<Symbol>;
 pub type IetfLanguageTags = Vec<IetfLanguageTag>;
 
+include!(concat!(env!("OUT_DIR"), "/definitions.rs"));
+
 #[derive(Debug, Hash, Eq, PartialEq, Clone)]
 pub enum AnnotationKey {
     Ulong(u64),
@@ -64,27 +66,6 @@ pub enum AnnotationKey {
 }
 
 pub type Annotations = HashMap<Symbol, Variant>;
-
-// macro_rules! decode_size_and_count {
-//     ($buf:ident, $code:expr, $code8:expr, $code32:expr) => {
-//         match $code {
-//             $code8 => {
-//                 if buf.len() < 2 {
-//                     Err()
-//                 }
-//                 buf[0]
-//             },
-//             $code32 => {
-
-//             },
-//             _ => 
-//         }
-//     }
-// }
-
-// fn test(b: &[u8]) -> Result<(u32, u32, &[u8]), Error> {
-//     let () = decode_size_and_count!(b, 0xc0, 0xc0, 0xd0);
-// }
 
 #[derive(Debug, Eq, PartialEq, Clone)]
 pub enum MessageId {
@@ -110,6 +91,25 @@ impl DecodeFormatted for MessageId {
     }
 }
 
+impl Encode for MessageId {
+    fn encoded_size(&self) -> usize {
+        match *self {
+            MessageId::Ulong(v) => v.encoded_size(),
+            MessageId::Uuid(v) => v.encoded_size(),
+            MessageId::Binary(v) => v.encoded_size(),
+            MessageId::String(v) => v.encoded_size()
+        }
+    }
+    fn encode(&self, buf: &mut BytesMut) {
+        match *self {
+            MessageId::Ulong(v) => v.encode(buf),
+            MessageId::Uuid(v) => v.encode(buf),
+            MessageId::Binary(v) => v.encode(buf),
+            MessageId::String(v) => v.encode(buf)
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum ErrorCondition {
     AmqpError(AmqpError),
@@ -119,6 +119,25 @@ pub enum ErrorCondition {
     Custom(Symbol)
 }
 
+impl DecodeFormatted for ErrorCondition {
+    fn decode_with_format(input: &[u8], format: u8) -> Result<(&[u8], Self)> {
+        let (input, result) = Symbol::decode_with_format(input, format)?;
+        if let Ok(r) = AmqpError::try_from(&result) {
+            return Ok((input, ErrorCondition::AmqpError(r)));
+        }
+        if let Ok(r) = ConnectionError::try_from(&result) {
+            return Ok((input, ErrorCondition::ConnectionError(r)));
+        }
+        if let Ok(r) = SessionError::try_from(&result) {
+            return Ok((input, ErrorCondition::SessionError(r)));
+        }
+        if let Ok(r) = LinkError::try_from(&result) {
+            return Ok((input, ErrorCondition::LinkError(r)));
+        }
+        Ok((input, ErrorCondition::Custom(result)))
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum DistributionMode {
     Move,
@@ -126,4 +145,15 @@ pub enum DistributionMode {
     Custom(Symbol)
 }
 
-include!(concat!(env!("OUT_DIR"), "/definitions.rs"));
+impl DecodeFormatted for DistributionMode {
+    fn decode_with_format(input: &[u8], format: u8) -> Result<(&[u8], Self)> {
+        let (input, result) = Symbol::decode_with_format(input, format)?;
+        let result = match result.as_str() {
+            "move" => DistributionMode::Move,
+            "copy" => DistributionMode::Copy,
+            _ => DistributionMode::Custom(result)
+        };
+        Ok((input, result))
+    }
+}
+

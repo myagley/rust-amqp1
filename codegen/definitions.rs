@@ -8,13 +8,14 @@ pub enum {{provide.name}} {
 }
 impl DecodeFormatted for {{provide.name}} {
     fn decode_with_format(input: &[u8], fmt: u8) -> Result<(&[u8], Self)> {
-        let (input, descriptor) = Descriptor::decode_with_format(input, fmt)?;
+        validate_code!(fmt, codec::FORMATCODE_DESCRIBED);
+        let (input, descriptor) = Descriptor::decode(input)?;
         match descriptor {
             {{#each provide.options as |option|}}
-            Descriptor::Ulong({{option.descriptor.code}}) => {{option.ty}}::decode(input).map(|(i, r)| (i, {{provide.name}}::{{option.ty}}(r))),
+            Descriptor::Ulong({{option.descriptor.code}}) => decode_{{snake option.ty}}_inner(input).map(|(i, r)| (i, {{provide.name}}::{{option.ty}}(r))),
             {{/each}}
             {{#each provide.options as |option|}}
-            Descriptor::Symbol(ref a) if a.as_str() == "{{option.descriptor.name}}" => {{option.ty}}::decode(input).map(|(i, r)| (i, {{provide.name}}::{{option.ty}}(r))),
+            Descriptor::Symbol(ref a) if a.as_str() == "{{option.descriptor.name}}" => decode_{{snake option.ty}}_inner(input).map(|(i, r)| (i, {{provide.name}}::{{option.ty}}(r))),
             {{/each}}
             _ => Err(ErrorKind::Custom(codec::INVALID_DESCRIPTOR).into())
         }
@@ -24,14 +25,14 @@ impl Encode for {{provide.name}} {
     fn encoded_size(&self) -> usize {
         match *self {
             {{#each provide.options as |option|}}
-            {{provide.name}}::{{option.ty}}(v) => v.encoded_size(),
+            {{provide.name}}::{{option.ty}}(ref v) => encoded_size_{{snake option.ty}}_inner(v),
             {{/each}}
         }
     }
     fn encode(&self, buf: &mut BytesMut) {
         match *self {
             {{#each provide.options as |option|}}
-            {{provide.name}}::{{option.ty}}(v) => v.encode(buf),
+            {{provide.name}}::{{option.ty}}(ref v) => encode_{{snake option.ty}}_inner(v, buf),
             {{/each}}
         }
     }
@@ -45,9 +46,8 @@ pub type {{alias.name}} = {{alias.source}};
 
 {{#each defs.enums as |enum|}}
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub enum {{enum.name}} { // {{enum.ty}}
+pub enum {{enum.name}} {
 {{#each enum.items as |item|}}
-    /// {{item.value}}
     {{item.name}},
 {{/each}}
 }
@@ -72,7 +72,7 @@ impl Encode for {{enum.name}} {
     fn encoded_size(&self) -> usize {
         match *self {
             {{#each enum.items as |item|}}
-            {{enum.name}}::{{item.name}} => "{{item.value}}".encoded_size(),
+            {{enum.name}}::{{item.name}} => {{item.value_len}} + 2,
             {{/each}}
         }
     }
@@ -105,19 +105,34 @@ impl Encode for {{enum.name}} {
     fn encoded_size(&self) -> usize {
         match *self {
             {{#each enum.items as |item|}}
-            {{item.name}} => {{item.value}}.encoded_size(),
+            {{enum.name}}::{{item.name}} => {{item.value}}.encoded_size(),
             {{/each}}
         }
     }
     fn encode(&self, buf: &mut BytesMut) {
         match *self {
             {{#each enum.items as |item|}}
-            {{item.name}} => {{item.value}}.encode(buf),
+            {{enum.name}}::{{item.name}} => {{item.value}}.encode(buf),
             {{/each}}
         }
     }
 }
 {{/if}}
+{{/each}}
+
+{{#each defs.described_restricted as |dr|}}
+type {{dr.name}} = {{dr.ty}};
+fn decode_{{snake dr.name}}_inner(input: &[u8]) -> Result<(&[u8], {{dr.name}})> {
+    {{dr.name}}::decode(input)
+}
+fn encoded_size_{{snake dr.name}}_inner(dr: &{{dr.name}}) -> usize {
+    // descriptor size + actual size
+    3 + dr.encoded_size()
+}
+fn encode_{{snake dr.name}}_inner(dr: &{{dr.name}}, buf: &mut BytesMut) {
+    Descriptor::Ulong({{dr.descriptor.code}}).encode(buf);
+    dr.encode(buf);
+}
 {{/each}}
 
 {{#each defs.lists as |list|}}
@@ -130,12 +145,6 @@ pub struct {{list.name}} {
     {{field.name}}: {{{field.ty}}},
     {{/if}}
     {{/each}}
-}
-
-impl Described for {{list.name}} {
-    fn descriptor_name(&self) -> &'static str { "{{list.descriptor.name}}" }
-    fn descriptor_domain(&self) -> u32 { {{list.descriptor.domain}} }
-    fn descriptor_code(&self) -> u32 { {{list.descriptor.code}} }
 }
 
 impl {{list.name}} {
@@ -167,67 +176,103 @@ impl {{list.name}} {
             {{/if}}
         {{/if}}
     {{/each}}
+
+    const FIELD_COUNT: usize = 0 {{#each list.fields as |field|}} + 1{{/each}};
+}
+fn decode_{{snake list.name}}_inner(input: &[u8]) -> Result<(&[u8], {{list.name}})> {
+    println!("decoding: {:?}", input);
+    let (input, format) = decode_format_code(input)?;
+    let (input, header) = decode_list_header(input, format)?;
+    let size = header.size as usize;
+    decode_check_len!(input, size);
+    {{#if list.fields}}
+    let (mut input, remainder) = input.split_at(size);
+    println!("split: {:?} || {:?}", input, remainder);
+    let mut count = header.count;
+    {{#each list.fields as |field|}}
+    {{#if field.optional}}
+    let {{field.name}}: Option<{{{field.ty}}}>;
+    if count > 0 {
+        let decoded = Option::<{{{field.ty}}}>::decode(input)?;
+        input = decoded.0;
+        {{field.name}} = decoded.1;
+        count -= 1;
+    }
+    else {
+        {{field.name}} = None;
+    }
+    {{else}}
+    let {{field.name}}: {{{field.ty}}};
+    if count > 0 {
+        {{#if field.default}}
+        let (in1, decoded) = Option::<{{{field.ty}}}>::decode(input)?;
+        {{field.name}} = decoded.unwrap_or({{field.default}});
+        {{else}}
+        let (in1, decoded) = {{{field.ty}}}::decode(input)?;
+        {{field.name}} = decoded;
+        {{/if}}
+        input = in1;
+        count -= 1;
+    }
+    else {
+        {{#if field.default}}
+        {{field.name}} = {{field.default}};
+        {{else}}
+        return Err("Required field {{field.name}} was omitted.".into());
+        {{/if}}
+    }
+    {{/if}}
+    {{/each}}
+    {{else}}
+    let remainder = &input[size..];
+    {{/if}}
+    Ok((remainder, {{list.name}} {
+    {{#each list.fields as |field|}}
+    {{field.name}},
+    {{/each}}
+    }))
 }
 
+fn encoded_size_{{snake list.name}}_inner(list: &{{list.name}}) -> usize { list.encoded_size() }
+fn encode_{{snake list.name}}_inner(list: &{{list.name}}, buf: &mut BytesMut) { list.encode(buf) }
+
 impl DecodeFormatted for {{list.name}} {
-    fn decode_with_format(input: &[u8], format: u8) -> Result<(&[u8], Self)> {
-        let (input, header) = decode_list_header(input, format)?;
-        let mut count = header.count;
-        let mut input = input;
-        {{#each list.fields as |field|}}
-        {{#if field.optional}}
-        let {{field.name}}: Option<{{{field.ty}}}>;
-        if count > 0 {
-            let decoded = Option::<{{{field.ty}}}>::decode(input)?;
-            input = decoded.0;
-            {{field.name}} = decoded.1;
-            count -= 1;
+    fn decode_with_format(input: &[u8], fmt: u8) -> Result<(&[u8], Self)> {
+        validate_code!(fmt, codec::FORMATCODE_DESCRIBED);
+        let (input, descriptor) = Descriptor::decode(input)?;
+        if descriptor != Descriptor::Ulong({{list.descriptor.code}})
+            && descriptor != Descriptor::Symbol(Symbol::from_static("{{list.descriptor.name}}"))
+        {
+            return Err("Invalid descriptor.".into());
         }
-        else {
-           {{field.name}} = None;
-        }
-        {{else}}
-        let {{field.name}}: {{{field.ty}}};
-        if count > 0 {
-            {{#if field.default}}
-            let (in1, decoded) = Option::<{{{field.ty}}}>::decode(input)?;
-            {{field.name}} = decoded.unwrap_or({{field.default}});
-            {{else}}
-            let (in1, decoded) = {{{field.ty}}}::decode(input)?;
-            {{field.name}} = decoded;
-            {{/if}}
-            input = in1;
-            count -= 1;
-        }
-        else {
-            {{#if field.default}}
-            {{field.name}} = {{field.default}};
-            {{else}}
-            return Err("Required field {{field.name}} was omitted.".into());
-            {{/if}}
-        }
-        {{/if}}
-        {{/each}}
-        Ok((input, {{list.name}} {
-        {{#each list.fields as |field|}}
-        {{field.name}},
-        {{/each}}
-        }))
+        decode_{{snake list.name}}_inner(input)
     }
 }
 
 impl Encode for {{list.name}} {
     fn encoded_size(&self) -> usize {
-        3 // 0x00 0x53 <descriptor code>
-        {{#each list.fields as |field|}}
-        + self.{{field.name}}.encoded_size()
-        {{/each}}
+        let content_size = 0 {{#each list.fields as |field|}} + self.{{field.name}}.encoded_size(){{/each}};
+        // header: 0x00 0x53 <descriptor code> format_code size count
+        (if content_size > u8::MAX as usize { 12 } else { 6 })
+            + content_size
     }
 
     fn encode(&self, buf: &mut BytesMut) {
-        buf.put_u8(codec::FORMATCODE_DESCRIBED);
-        {{list.descriptor.code}}.encode(buf);
+        Descriptor::Ulong({{list.descriptor.code}}).encode(buf);
+        let content_size = 0 {{#each list.fields as |field|}} + self.{{field.name}}.encoded_size(){{/each}};
+        if content_size > u8::MAX as usize {
+            buf.put_u8(codec::FORMATCODE_LIST32);
+            buf.put_u32::<BigEndian>(content_size as u32);
+            buf.put_u32::<BigEndian>(Self::FIELD_COUNT as u32);
+        }
+        else {
+            buf.put_u8(codec::FORMATCODE_LIST8);
+            buf.put_u8(content_size as u8);
+            buf.put_u8(Self::FIELD_COUNT as u8);
+        }
+        {{#each list.fields as |field|}}
+        self.{{field.name}}.encode(buf);
+        {{/each}}
     }
 }
-
 {{/each}}

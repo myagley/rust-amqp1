@@ -3,8 +3,8 @@ use std::{i8, u8};
 use bytes::{BigEndian, BufMut, Bytes, BytesMut};
 use chrono::{DateTime, Utc};
 use codec::{self, ArrayEncode, Encode};
-use framing::{self, AmqpFrame, Frame};
-use types::{ByteStr, Descriptor, Symbol, Variant};
+use framing::{self, AmqpFrame, SaslFrame};
+use types::{ByteStr, Descriptor, Symbol, Multiple, Variant};
 use uuid::Uuid;
 use std::collections::HashMap;
 use std::hash::Hash;
@@ -381,7 +381,7 @@ impl ArrayEncode for str {
 
 impl Encode for Symbol {
     fn encoded_size(&self) -> usize {
-        let length = self.as_str().len();
+        let length = self.len();
         let size = if length > u8::MAX as usize { 5 } else { 2 };
         size + length
     }
@@ -417,23 +417,22 @@ fn map_encoded_size<K: Hash + Eq + Encode, V: Encode>(map: &HashMap<K, V>) -> us
 }
 impl<K: Eq + Hash + Encode, V: Encode> Encode for HashMap<K, V> {
     fn encoded_size(&self) -> usize {
-        let count = self.len();
         let size = map_encoded_size(self);
         // f:1 + s:4 + c:4 vs f:1 + s:1 + c:1
-        let preamble = if size > u8::MAX as usize { 9 } else { 3 };
+        let preamble = if size + 1 > u8::MAX as usize { 9 } else { 3 };
         preamble + size
     }
 
     fn encode(&self, buf: &mut BytesMut) {
-        let count = self.len();
+        let count = self.len() * 2; // key-value pair accounts for two items in count
         let size = map_encoded_size(self);
-        if size > u8::MAX as usize {
+        if size + 1 > u8::MAX as usize {
             buf.put_u8(codec::FORMATCODE_MAP32);
-            buf.put_u32::<BigEndian>(size as u32);
+            buf.put_u32::<BigEndian>((size + 4) as u32); // +4 for 4 byte count that follows
             buf.put_u32::<BigEndian>(count as u32);
         } else {
             buf.put_u8(codec::FORMATCODE_MAP8);
-            buf.put_u8(size as u8);
+            buf.put_u8((size + 1) as u8); // +1 for 1 byte count that follows
             buf.put_u8(count as u8);
         }
 
@@ -449,8 +448,10 @@ impl<K: Eq + Hash + Encode, V: Encode> ArrayEncode for HashMap<K, V> {
         8 + map_encoded_size(self)
     }
     fn array_encode(&self, buf: &mut BytesMut) {
-        buf.put_u32::<BigEndian>(self.encoded_size() as u32);
-        buf.put_u32::<BigEndian>(self.len() as u32);
+        let count = self.len() * 2;
+        let size = map_encoded_size(self) + 4;
+        buf.put_u32::<BigEndian>(size as u32);
+        buf.put_u32::<BigEndian>(count as u32);
 
         for (k, v) in self {
             k.encode(buf);
@@ -465,25 +466,45 @@ fn array_encoded_size<T: ArrayEncode>(vec: &Vec<T>) -> usize {
 impl<T: ArrayEncode> Encode for Vec<T> {
     fn encoded_size(&self) -> usize {
         let content_size = array_encoded_size(self);
-        1 // format code
-            + (if content_size > u8::MAX as usize { 8 } else { 2 }) // size + count
-            + 1 // item constructor -- todo: support described ctor?
+        // format_code + size + count + item constructor -- todo: support described ctor?
+        (if content_size + 2 > u8::MAX as usize { 10 } else { 4 }) // +2 for 1 byte count and 1 byte format code
             + content_size
     }
 
     fn encode(&self, buf: &mut BytesMut) {
-        let size = self.encoded_size();
-        if size > u8::MAX as usize {
+        let size = array_encoded_size(self);
+        if size + 2 > u8::MAX as usize {
             buf.put_u8(codec::FORMATCODE_ARRAY32);
-            buf.put_u32::<BigEndian>(size as u32);
+            buf.put_u32::<BigEndian>((size + 5) as u32); // +5 for 4 byte and 1 byte item ctor that follow
             buf.put_u32::<BigEndian>(self.len() as u32);
         } else {
             buf.put_u8(codec::FORMATCODE_ARRAY8);
-            buf.put_u8(size as u8);
+            buf.put_u8((size + 2) as u8); // +2 for 1 byte and 1 byte item ctor that follow
             buf.put_u8(self.len() as u8);
         }
         for i in self {
             i.array_encode(buf);
+        }
+    }
+}
+
+impl<T: Encode + ArrayEncode> Encode for Multiple<T> {
+    fn encoded_size(&self) -> usize {
+        let count = self.0.len();
+        if count == 1 { // special case: single item is encoded without array encoding
+            self.0[0].encoded_size()
+        } else {
+            self.0.encoded_size()
+        }
+    }
+
+    fn encode(&self, buf: &mut BytesMut) {
+        let count = self.0.len();
+        if count == 1 { // special case: single item is encoded without array encoding
+            self.0[0].encode(buf)
+        }
+        else {
+            self.0.encode(buf)
         }
     }
 }
@@ -556,31 +577,15 @@ impl Encode for Descriptor {
     fn encoded_size(&self) -> usize {
         match *self {
             Descriptor::Ulong(v) => 1 + v.encoded_size(),
-            Descriptor::Symbol(v) => 1 + v.encoded_size(),
+            Descriptor::Symbol(ref v) => 1 + v.encoded_size(),
         }
     }
 
     fn encode(&self, buf: &mut BytesMut) {
-        buf.put_u8(0x00);
+        buf.put_u8(codec::FORMATCODE_DESCRIBED);
         match *self {
             Descriptor::Ulong(v) => v.encode(buf),
-            Descriptor::Symbol(v) => v.encode(buf),
-        }
-    }
-}
-
-impl Encode for Frame {
-    fn encoded_size(&self) -> usize {
-        match *self {
-            Frame::Amqp(ref a) => a.encoded_size(),
-            Frame::Sasl() => unimplemented!(),
-        }
-    }
-
-    fn encode(&self, buf: &mut BytesMut) {
-        match *self {
-            Frame::Amqp(ref a) => a.encode(buf),
-            Frame::Sasl() => unimplemented!(),
+            Descriptor::Symbol(ref v) => v.encode(buf),
         }
     }
 }
@@ -588,19 +593,31 @@ impl Encode for Frame {
 const WORD_LEN: usize = 4;
 impl Encode for AmqpFrame {
     fn encoded_size(&self) -> usize {
-        framing::HEADER_LEN + self.body().len()
+        framing::HEADER_LEN + self.performative().encoded_size() + self.body().len()
     }
 
     fn encode(&self, buf: &mut BytesMut) {
-        if buf.remaining_mut() < self.encoded_size() {
-            buf.reserve(self.encoded_size());
-        }
-
         let doff: u8 = (framing::HEADER_LEN / WORD_LEN) as u8;
         buf.put_u32::<BigEndian>(self.encoded_size() as u32);
         buf.put_u8(doff);
         buf.put_u8(framing::FRAME_TYPE_AMQP);
         buf.put_u16::<BigEndian>(self.channel_id());
+        self.performative().encode(buf);
         buf.put(self.body());
+    }
+}
+
+impl Encode for SaslFrame {
+    fn encoded_size(&self) -> usize {
+        framing::HEADER_LEN + self.body.encoded_size()
+    }
+
+    fn encode(&self, buf: &mut BytesMut) {
+        let doff: u8 = (framing::HEADER_LEN / WORD_LEN) as u8;
+        buf.put_u32::<BigEndian>(self.encoded_size() as u32);
+        buf.put_u8(doff);
+        buf.put_u8(framing::FRAME_TYPE_SASL);
+        buf.put_u16::<BigEndian>(0);
+        self.body.encode(buf);
     }
 }

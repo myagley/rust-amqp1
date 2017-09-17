@@ -8,6 +8,7 @@ use std::sync::Mutex;
 lazy_static! {
     static ref PRIMITIVE_TYPES: HashMap<&'static str, &'static str> = {
         let mut m = HashMap::new();
+        m.insert("*", "Variant");
         m.insert("binary", "Bytes");
         m.insert("string", "ByteStr");
         m.insert("ubyte", "u8");
@@ -113,13 +114,16 @@ pub struct Alias {
 pub struct EnumItem {
     name: String,
     value: String,
+    #[serde(default)]
+    value_len: usize
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Definitions {
     aliases: Vec<Alias>,
     enums: Vec<Enum>,
-    lists: Vec<DescribedList>,
+    lists: Vec<Described>,
+    described_restricted: Vec<Described>,
     provides: Vec<ProvidesEnum>,
 }
 
@@ -146,8 +150,9 @@ pub struct Enum {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DescribedList {
+pub struct Described {
     name: String,
+    ty: String,
     provides: Vec<String>,
     descriptor: Descriptor,
     fields: Vec<Field>,
@@ -176,6 +181,7 @@ impl Definitions {
         let mut aliases = vec![];
         let mut enums = vec![];
         let mut lists = vec![];
+        let mut described_restricted = vec![];
         let mut provide_map: HashMap<String, Vec<ProvidesItem>> = HashMap::new();
         for t in types.into_iter() {
             match t {
@@ -189,11 +195,16 @@ impl Definitions {
                     Definitions::register_provides(&mut provide_map, &en.name, None, &en.provides);
                     enums.push(en);
                 }
-                _Type::Described(ref l) if l.source == "list" => {
-                    let ls = DescribedList::from(l.clone());
+                _Type::Described(ref d) if d.source == "list" => {
+                    let ls = Described::list(d.clone());
                     Definitions::register_provides(&mut provide_map, &ls.name, Some(ls.descriptor.clone()), &ls.provides);
                     lists.push(ls);
-                }
+                },
+                _Type::Described(ref d) if d.class == "restricted" => {
+                    let ls = Described::alias(d.clone());
+                    Definitions::register_provides(&mut provide_map, &ls.name, Some(ls.descriptor.clone()), &ls.provides);
+                    described_restricted.push(ls);
+                },
                 _ => {}
             }
         }
@@ -215,6 +226,7 @@ impl Definitions {
             aliases,
             enums,
             lists,
+            described_restricted,
             provides,
         }
     }
@@ -244,16 +256,18 @@ impl Alias {
 impl Enum {
     fn from(e: _Enum) -> Enum {
         let ty = get_type_name(&*e.source, None);
+        let is_symbol = ty == "Symbol";
         Enum {
             name: camel_case(&*e.name),
             ty: ty.clone(),
             provides: parse_provides(e.provides),
-            is_symbol: ty == "Symbol",
+            is_symbol,
             items: e.choice
                 .into_iter()
                 .map(|c| {
                     EnumItem {
                         name: camel_case(&*c.name),
+                        value_len: c.value.len(),
                         value: c.value,
                     }
                 })
@@ -262,10 +276,20 @@ impl Enum {
     }
 }
 
-impl DescribedList {
-    fn from(d: _Described) -> DescribedList {
-        DescribedList {
+impl Described {
+    fn list(d: _Described) -> Described {
+        Described {
             name: camel_case(&d.name),
+            ty: String::new(),
+            provides: parse_provides(d.provides),
+            descriptor: Descriptor::from(d.descriptor),
+            fields: d.field.into_iter().map(|f| Field::from(f)).collect(),
+        }
+    }
+    fn alias(d: _Described) -> Described {
+        Described {
+            name: camel_case(&d.name),
+            ty: get_type_name(&d.source, None),
             provides: parse_provides(d.provides),
             descriptor: Descriptor::from(d.descriptor),
             fields: d.field.into_iter().map(|f| Field::from(f)).collect(),

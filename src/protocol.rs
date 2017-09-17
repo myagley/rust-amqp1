@@ -1,20 +1,21 @@
-use bytes::{Buf, BufMut, BytesMut, Bytes, BigEndian};
+use bytes::{BigEndian, Buf, BufMut, Bytes, BytesMut};
 use super::errors::*;
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 use uuid::Uuid;
-use nom::{ErrorKind};
-use super::codec::{self, Decode, DecodeFormatted, Encode, decode_map_header, decode_list_header, INVALID_FORMATCODE};
+use nom::ErrorKind;
+use super::codec::{self, decode_format_code, decode_list_header, decode_map_header, Decode, DecodeFormatted, Encode, INVALID_FORMATCODE};
 use super::types::*;
+use std::u8;
 
 pub(crate) struct CompoundHeader {
     pub size: u32,
     pub count: u32,
 }
 
-impl  CompoundHeader {
+impl CompoundHeader {
     pub fn empty() -> CompoundHeader {
-         CompoundHeader { size: 0, count: 0 }
+        CompoundHeader { size: 0, count: 0 }
     }
 }
 
@@ -22,47 +23,51 @@ pub const PROTOCOL_HEADER_LEN: usize = 8;
 const PROTOCOL_HEADER_PREFIX: &'static [u8] = b"AMQP";
 const PROTOCOL_VERSION: &'static [u8] = &[1, 0, 0];
 
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub enum ProtocolId {
     Amqp = 0,
-    AmqpTls = 1,
-    AmqpSasl = 2
+    AmqpTls = 2,
+    AmqpSasl = 3,
 }
 
 pub fn decode_protocol_header(src: &[u8]) -> Result<ProtocolId> {
-    if &src[0..3] != PROTOCOL_HEADER_PREFIX {
-        return Err("Protocol header is invalid.".into());
+    if &src[0..4] != PROTOCOL_HEADER_PREFIX {
+        return Err(format!("Protocol header is invalid. {:?}", src).into());
     }
     let protocol_id = src[4];
-    if &src[5..7] != PROTOCOL_VERSION {
-        return Err("Protocol version is incompatible.".into());
+    if &src[5..8] != PROTOCOL_VERSION {
+        return Err(format!("Protocol version is incompatible. {:?}", &src[5..8]).into());
     }
     match protocol_id {
         0 => Ok(ProtocolId::Amqp),
-        1 => Ok(ProtocolId::AmqpTls),
-        2 => Ok(ProtocolId::AmqpSasl),
-        _ => Err("Unknown protocol id.".into())
+        2 => Ok(ProtocolId::AmqpTls),
+        3 => Ok(ProtocolId::AmqpSasl),
+        _ => Err("Unknown protocol id.".into()),
     }
 }
 
-pub trait Described {
-    fn descriptor_name(&self) -> &str;
-    fn descriptor_domain(&self) -> u32;
-    fn descriptor_code(&self) -> u32;
+pub fn encode_protocol_header(protocol_id: ProtocolId) -> BytesMut {
+    let mut buf = BytesMut::with_capacity(8);
+    buf.put_slice(PROTOCOL_HEADER_PREFIX);
+    buf.put_u8(protocol_id as u8);
+    buf.put_slice(PROTOCOL_VERSION);
+    buf
 }
 
+pub type List = Vec<Variant>;
 pub type Map = HashMap<Variant, Variant>;
 pub type Fields = HashMap<Symbol, Variant>;
 pub type FilterSet = HashMap<Symbol, Option<ByteStr>>;
 pub type Timestamp = DateTime<Utc>;
-pub type Symbols = Vec<Symbol>;
-pub type IetfLanguageTags = Vec<IetfLanguageTag>;
+pub type Symbols = Multiple<Symbol>;
+pub type IetfLanguageTags = Multiple<IetfLanguageTag>;
 
 include!(concat!(env!("OUT_DIR"), "/definitions.rs"));
 
 #[derive(Debug, Hash, Eq, PartialEq, Clone)]
 pub enum AnnotationKey {
     Ulong(u64),
-    Symbol(Symbol)
+    Symbol(Symbol),
 }
 
 pub type Annotations = HashMap<Symbol, Variant>;
@@ -72,21 +77,17 @@ pub enum MessageId {
     Ulong(u64),
     Uuid(Uuid),
     Binary(Bytes),
-    String(ByteStr)
+    String(ByteStr),
 }
 
 impl DecodeFormatted for MessageId {
     fn decode_with_format(input: &[u8], format: u8) -> Result<(&[u8], Self)> {
         match format {
-            codec::FORMATCODE_SMALLULONG |
-            codec::FORMATCODE_ULONG |
-            codec::FORMATCODE_ULONG_0 => u64::decode_with_format(input, format).map(|(i, o)| (i, MessageId::Ulong(o))),
+            codec::FORMATCODE_SMALLULONG | codec::FORMATCODE_ULONG | codec::FORMATCODE_ULONG_0 => u64::decode_with_format(input, format).map(|(i, o)| (i, MessageId::Ulong(o))),
             codec::FORMATCODE_UUID => Uuid::decode_with_format(input, format).map(|(i, o)| (i, MessageId::Uuid(o))),
-            codec::FORMATCODE_BINARY8 |
-            codec::FORMATCODE_BINARY32 => Bytes::decode_with_format(input, format).map(|(i, o)| (i, MessageId::Binary(o))),
-            codec::FORMATCODE_STRING8 |
-            codec::FORMATCODE_STRING32 => ByteStr::decode_with_format(input, format).map(|(i, o)| (i, MessageId::String(o))),
-            _ => Err(ErrorKind::Custom(codec::INVALID_FORMATCODE).into())
+            codec::FORMATCODE_BINARY8 | codec::FORMATCODE_BINARY32 => Bytes::decode_with_format(input, format).map(|(i, o)| (i, MessageId::Binary(o))),
+            codec::FORMATCODE_STRING8 | codec::FORMATCODE_STRING32 => ByteStr::decode_with_format(input, format).map(|(i, o)| (i, MessageId::String(o))),
+            _ => Err(ErrorKind::Custom(codec::INVALID_FORMATCODE).into()),
         }
     }
 }
@@ -95,17 +96,17 @@ impl Encode for MessageId {
     fn encoded_size(&self) -> usize {
         match *self {
             MessageId::Ulong(v) => v.encoded_size(),
-            MessageId::Uuid(v) => v.encoded_size(),
-            MessageId::Binary(v) => v.encoded_size(),
-            MessageId::String(v) => v.encoded_size()
+            MessageId::Uuid(ref v) => v.encoded_size(),
+            MessageId::Binary(ref v) => v.encoded_size(),
+            MessageId::String(ref v) => v.encoded_size(),
         }
     }
     fn encode(&self, buf: &mut BytesMut) {
         match *self {
             MessageId::Ulong(v) => v.encode(buf),
-            MessageId::Uuid(v) => v.encode(buf),
-            MessageId::Binary(v) => v.encode(buf),
-            MessageId::String(v) => v.encode(buf)
+            MessageId::Uuid(ref v) => v.encode(buf),
+            MessageId::Binary(ref v) => v.encode(buf),
+            MessageId::String(ref v) => v.encode(buf),
         }
     }
 }
@@ -116,7 +117,7 @@ pub enum ErrorCondition {
     ConnectionError(ConnectionError),
     SessionError(SessionError),
     LinkError(LinkError),
-    Custom(Symbol)
+    Custom(Symbol),
 }
 
 impl DecodeFormatted for ErrorCondition {
@@ -138,11 +139,32 @@ impl DecodeFormatted for ErrorCondition {
     }
 }
 
+impl Encode for ErrorCondition {
+    fn encoded_size(&self) -> usize {
+        match *self {
+            ErrorCondition::AmqpError(ref v) => v.encoded_size(),
+            ErrorCondition::ConnectionError(ref v) => v.encoded_size(),
+            ErrorCondition::SessionError(ref v) => v.encoded_size(),
+            ErrorCondition::LinkError(ref v) => v.encoded_size(),
+            ErrorCondition::Custom(ref v) => v.encoded_size()
+        }
+    }
+    fn encode(&self, buf: &mut BytesMut) {
+        match *self {
+            ErrorCondition::AmqpError(ref v) => v.encode(buf),
+            ErrorCondition::ConnectionError(ref v) => v.encode(buf),
+            ErrorCondition::SessionError(ref v) => v.encode(buf),
+            ErrorCondition::LinkError(ref v) => v.encode(buf),
+            ErrorCondition::Custom(ref v) => v.encode(buf)
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum DistributionMode {
     Move,
     Copy,
-    Custom(Symbol)
+    Custom(Symbol),
 }
 
 impl DecodeFormatted for DistributionMode {
@@ -151,9 +173,25 @@ impl DecodeFormatted for DistributionMode {
         let result = match result.as_str() {
             "move" => DistributionMode::Move,
             "copy" => DistributionMode::Copy,
-            _ => DistributionMode::Custom(result)
+            _ => DistributionMode::Custom(result),
         };
         Ok((input, result))
     }
 }
 
+impl Encode for DistributionMode {
+    fn encoded_size(&self) -> usize {
+        match *self {
+            DistributionMode::Move => 6,
+            DistributionMode::Copy => 6,
+            DistributionMode::Custom(ref v) => v.encoded_size(),
+        }
+    }
+    fn encode(&self, buf: &mut BytesMut) {
+        match *self {
+            DistributionMode::Move => Symbol::from_static("move").encode(buf),
+            DistributionMode::Copy => Symbol::from_static("copy").encode(buf),
+            DistributionMode::Custom(ref v) => v.encode(buf),
+        }
+    }
+}

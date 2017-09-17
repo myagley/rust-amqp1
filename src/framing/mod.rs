@@ -8,24 +8,21 @@ pub const HEADER_LEN: usize = 8;
 pub const FRAME_TYPE_AMQP: u8 = 0x00;
 pub const FRAME_TYPE_SASL: u8 = 0x01;
 
-/// Represents a frame. There are two common variants: AMQP and SASL frames
-#[derive(Clone, Debug, PartialEq)]
-pub enum Frame {
-    Amqp(AmqpFrame),
-    Sasl()
-}
-
 /// Represents an AMQP Frame
 #[derive(Clone, Debug, PartialEq)]
 pub struct AmqpFrame {
     channel_id: u16,
     performative: protocol::Frame,
-    body: Bytes
+    body: Bytes,
 }
 
 impl AmqpFrame {
     pub fn new(channel_id: u16, performative: protocol::Frame, body: Bytes) -> AmqpFrame {
-        AmqpFrame { channel_id, performative, body }
+        AmqpFrame {
+            channel_id,
+            performative,
+            body,
+        }
     }
 
     #[inline]
@@ -34,7 +31,18 @@ impl AmqpFrame {
     }
 
     #[inline]
+    pub fn performative(&self) -> &protocol::Frame {
+        &self.performative
+    }
+
+    #[inline]
     pub fn body(&self) -> &Bytes {
         &self.body
     }
+}
+
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct SaslFrame {
+    pub body: protocol::SaslFrame,
 }

@@ -3,9 +3,9 @@ use std::{char, str, u8};
 use bytes::{BigEndian, ByteOrder, Bytes};
 use chrono::{DateTime, TimeZone, Utc};
 use codec::{self, DecodeFormatted, Decode};
-use framing::{AmqpFrame, Frame, HEADER_LEN};
+use framing::{self, AmqpFrame, SaslFrame, HEADER_LEN};
 use nom::ErrorKind;
-use types::{ByteStr, Descriptor, Symbol, Variant, VariantMap};
+use types::{ByteStr, Descriptor, Symbol, Multiple, Variant, VariantMap};
 use uuid::Uuid;
 use ordered_float::OrderedFloat;
 use protocol::{self, CompoundHeader};
@@ -255,17 +255,18 @@ impl<T: DecodeFormatted> DecodeFormatted for Vec<T> {
                 decode_check_len!(input, 2);
                 size = input[0] as usize;
                 count = input[1] as usize;
-                decode_check_len!(input, size);
-                let split_in = input.split_at(size);
-                arr_input = &split_in.0[2..];
+                decode_check_len!(input, size + 2);
+                let split_in = input[2..].split_at(size);
+                arr_input = &split_in.0;
                 remainder = split_in.1;
             },
             codec::FORMATCODE_ARRAY32 =>{
                 decode_check_len!(input, 8);
                 size = BigEndian::read_u32(input) as usize;
                 count = BigEndian::read_u32(&input[4..]) as usize;
-                let split_in = input.split_at(size);
-                arr_input = &split_in.0[8..];
+                decode_check_len!(input, size + 8);
+                let split_in = input[8..].split_at(size);
+                arr_input = &split_in.0;
                 remainder = split_in.1;
             },
             _ => {
@@ -281,6 +282,21 @@ impl<T: DecodeFormatted> DecodeFormatted for Vec<T> {
             arr_input = new_input;
         }
         Ok((remainder, result))
+    }
+}
+
+impl<T: DecodeFormatted> DecodeFormatted for Multiple<T> {
+    fn decode_with_format(input: &[u8], fmt: u8) -> Result<(&[u8], Self)> {
+        match fmt {
+            codec::FORMATCODE_ARRAY8 | codec::FORMATCODE_ARRAY32 => {
+                let (input, items) = Vec::<T>::decode_with_format(input, fmt)?;
+                Ok((input, Multiple(items)))
+            },
+            _ => {
+                let (input, item) = T::decode_with_format(input, fmt)?;
+                Ok((input, Multiple(vec![item])))
+            }
+        }
     }
 }
 
@@ -352,27 +368,36 @@ impl DecodeFormatted for Descriptor {
     }
 }
 
-fn decode_amqp_frame(input: &[u8], doff: u8) -> Result<(&[u8], Frame)> {
-    let channel_id = BigEndian::read_u16(input);
-    let ext_header_len = doff as usize * 4 - HEADER_LEN;
-    let input = &input[ext_header_len + 2..];
-    decode_check_len!(input, ext_header_len);
-    let (input, performative) = protocol::Frame::decode(input)?;
-    let body = Bytes::from(input);
-    Ok((input, Frame::Amqp(AmqpFrame::new(channel_id, performative, body)))) 
+impl Decode for AmqpFrame {
+    fn decode(input: &[u8]) -> Result<(&[u8], Self)> {
+        let (input, channel_id) = decode_frame_header(input, framing::FRAME_TYPE_AMQP)?;
+        let (input, performative) = protocol::Frame::decode(input)?;
+        let body = Bytes::from(input);
+        Ok((input, AmqpFrame::new(channel_id, performative, body))) 
+    }
 }
 
-impl Decode for Frame {
+impl Decode for SaslFrame {
     fn decode(input: &[u8]) -> Result<(&[u8], Self)> {
-        decode_check_len!(input, 4);
-        let doff = input[0];
-        let frame_type = input[1];
-        let input = &input[2..];
-        match frame_type {
-            FRAME_TYPE_AMQP => decode_amqp_frame(input, doff),
-            FRAME_TYPE_SASL => Ok((input, Frame::Sasl()))
-        }
+        let (input, _) = decode_frame_header(input, framing::FRAME_TYPE_SASL)?;
+        let (input, frame) = protocol::SaslFrame::decode(input)?;
+        Ok((input, SaslFrame { body: frame }))
     }
+}
+
+fn decode_frame_header(input: &[u8], expected_frame_type: u8) -> Result<(&[u8], u16)> {
+    println!("received: {:?}", input);
+    decode_check_len!(input, 4);
+    let doff = input[0];
+    let frame_type = input[1];
+    if frame_type != expected_frame_type {
+        return Err(format!("Unexpected frame type: {:?}", frame_type).into());
+    }
+    let channel_id = BigEndian::read_u16(&input[2..]);
+    let ext_header_len = doff as usize * 4 - HEADER_LEN;
+    decode_check_len!(input, ext_header_len + 4);
+    let input = &input[ext_header_len + 4..]; // skipping remaining two header bytes and ext header
+    Ok((input, channel_id))
 }
 
 pub(crate) fn decode_list_header(input: &[u8], fmt: u8) -> Result<(&[u8], CompoundHeader)> {
@@ -394,14 +419,14 @@ pub(crate) fn decode_map_header(input: &[u8], fmt: u8) -> Result<(&[u8], Compoun
 
 fn decode_compound8(input: &[u8]) -> Result<(&[u8], CompoundHeader)> {
     decode_check_len!(input, 2);
-    let size = input[0];
+    let size = input[0] - 1; // -1 for 1 byte count
     let count = input[1];
     Ok((&input[2..], CompoundHeader {size: size as u32, count: count as u32}))
 }
 
 fn decode_compound32(input: &[u8]) -> Result<(&[u8], CompoundHeader)> {
     decode_check_len!(input, 8);
-    let size = BigEndian::read_u32(input);
+    let size = BigEndian::read_u32(input) - 4; // -4 for 4 byte count
     let count = BigEndian::read_u32(&input[4..]);
     Ok((&input[8..], CompoundHeader {size: size, count: count}))
 }

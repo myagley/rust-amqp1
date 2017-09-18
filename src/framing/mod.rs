@@ -44,5 +44,11 @@ impl AmqpFrame {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct SaslFrame {
-    pub body: protocol::SaslFrame,
+    pub body: protocol::SaslFrameBody,
+}
+
+impl SaslFrame {
+    pub fn new(body: protocol::SaslFrameBody) -> SaslFrame {
+        SaslFrame { body }
+    }
 }

@@ -140,9 +140,9 @@ fn encode_{{snake dr.name}}_inner(dr: &{{dr.name}}, buf: &mut BytesMut) {
 pub struct {{list.name}} {
     {{#each list.fields as |field|}}
     {{#if field.optional}}
-    {{field.name}}: Option<{{{field.ty}}}>,
+    pub {{field.name}}: Option<{{{field.ty}}}>,
     {{else}}
-    {{field.name}}: {{{field.ty}}},
+    pub {{field.name}}: {{{field.ty}}},
     {{/if}}
     {{/each}}
 }
@@ -180,14 +180,14 @@ impl {{list.name}} {
     const FIELD_COUNT: usize = 0 {{#each list.fields as |field|}} + 1{{/each}};
 }
 fn decode_{{snake list.name}}_inner(input: &[u8]) -> Result<(&[u8], {{list.name}})> {
-    println!("decoding: {:?}", input);
+    use hex_slice::AsHex;
+    println!("decoding: {:x}", input.as_hex());
     let (input, format) = decode_format_code(input)?;
     let (input, header) = decode_list_header(input, format)?;
     let size = header.size as usize;
     decode_check_len!(input, size);
     {{#if list.fields}}
     let (mut input, remainder) = input.split_at(size);
-    println!("split: {:?} || {:?}", input, remainder);
     let mut count = header.count;
     {{#each list.fields as |field|}}
     {{#if field.optional}}

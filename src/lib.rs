@@ -11,6 +11,7 @@ extern crate ordered_float;
 #[macro_use]
 extern crate error_chain;
 extern crate tokio_io;
+extern crate hex_slice;
 
 use futures::prelude::*;
 

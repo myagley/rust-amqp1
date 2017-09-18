@@ -38,12 +38,11 @@ fn read_i8(input: &[u8]) -> Result<(&[u8], i8)> {
 }
 
 fn read_bytes_u8(input: &[u8]) -> Result<(&[u8], &[u8])> {
-    let len: u8;
-    let a = read_u8(input)?;
-    let input = a.0;
-    let len = a.1 as usize;
+    let (input, len) = read_u8(input)?;
+    let len = len as usize;
     decode_check_len!(input, len);
-    Ok(input.split_at(len))
+    let (bytes, input) = input.split_at(len);
+    Ok((input, bytes))
 }
 
 fn read_bytes_u32(input: &[u8]) -> Result<(&[u8], &[u8])> {
@@ -51,7 +50,8 @@ fn read_bytes_u32(input: &[u8]) -> Result<(&[u8], &[u8])> {
     let (input, len) = result?;
     let len = len as usize;
     decode_check_len!(input, len);
-    Ok(input.split_at(len))
+    let (bytes, input) = input.split_at(len);
+    Ok((input, bytes))
 }
 
 #[macro_export]
@@ -380,13 +380,12 @@ impl Decode for AmqpFrame {
 impl Decode for SaslFrame {
     fn decode(input: &[u8]) -> Result<(&[u8], Self)> {
         let (input, _) = decode_frame_header(input, framing::FRAME_TYPE_SASL)?;
-        let (input, frame) = protocol::SaslFrame::decode(input)?;
+        let (input, frame) = protocol::SaslFrameBody::decode(input)?;
         Ok((input, SaslFrame { body: frame }))
     }
 }
 
 fn decode_frame_header(input: &[u8], expected_frame_type: u8) -> Result<(&[u8], u16)> {
-    println!("received: {:?}", input);
     decode_check_len!(input, 4);
     let doff = input[0];
     let frame_type = input[1];

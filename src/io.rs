@@ -38,6 +38,7 @@ impl<T: Decode> Decoder for AmqpDecoder<T> {
     type Error = Error;
 
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>> {
+        use hex_slice::AsHex;
         loop {
             match self.state {
                 DecodeState::FrameHeader => {
@@ -49,6 +50,7 @@ impl<T: Decode> Decoder for AmqpDecoder<T> {
                     // todo: max frame size check
                     self.state = DecodeState::Frame(size);
                     src.split_to(4);
+                    println!("after size: {:x}", src.as_ref().as_hex());
                     if len < size {
                         src.reserve(size); // extend receiving buffer to fit the whole frame -- todo: too eager?
                         return Ok(None);
@@ -60,11 +62,13 @@ impl<T: Decode> Decoder for AmqpDecoder<T> {
                     }
 
                     let frame_buf = src.split_to(size);
+                    println!("after frame cut: {:x}", src.as_ref().as_hex());
                     let (remainder, frame) = T::decode(frame_buf.as_ref())?;
                     if remainder.len() > 0 { // todo: could it really happen?
                         return Err("bytes left unparsed at the frame trail".into());
                     }
                     src.reserve(HEADER_LEN);
+                    self.state = DecodeState::FrameHeader;
                     return Ok(Some(frame));
                 }
             }

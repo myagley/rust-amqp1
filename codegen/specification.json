@@ -691,7 +691,7 @@
     "name": "sasl-mechanisms",
     "class": "composite",
     "source": "list",
-    "provides": "sasl-frame",
+    "provides": "sasl-frame-body",
     "descriptor": {
       "name": "amqp:sasl-mechanisms:list",
       "code": "0x00000000:0x00000040"
@@ -707,7 +707,7 @@
     "name": "sasl-init",
     "class": "composite",
     "source": "list",
-    "provides": "sasl-frame",
+    "provides": "sasl-frame-body",
     "descriptor": {
       "name": "amqp:sasl-init:list",
       "code": "0x00000000:0x00000041"
@@ -732,7 +732,7 @@
     "name": "sasl-challenge",
     "class": "composite",
     "source": "list",
-    "provides": "sasl-frame",
+    "provides": "sasl-frame-body",
     "descriptor": {
       "name": "amqp:sasl-challenge:list",
       "code": "0x00000000:0x00000042"
@@ -747,7 +747,7 @@
     "name": "sasl-response",
     "class": "composite",
     "source": "list",
-    "provides": "sasl-frame",
+    "provides": "sasl-frame-body",
     "descriptor": {
       "name": "amqp:sasl-response:list",
       "code": "0x00000000:0x00000043"
@@ -762,7 +762,7 @@
     "name": "sasl-outcome",
     "class": "composite",
     "source": "list",
-    "provides": "sasl-frame",
+    "provides": "sasl-frame-body",
     "descriptor": {
       "name": "amqp:sasl-outcome:list",
       "code": "0x00000000:0x00000044"

@@ -195,3 +195,9 @@ impl Encode for DistributionMode {
         }
     }
 }
+
+impl SaslInit {
+    pub fn prepare_response(authz_id: &str, authn_id: &str, password: &str) -> Bytes {
+        Bytes::from(format!("{}\x00{}\x00{}", authz_id, authn_id, password))
+    }
+}

@@ -454,9 +454,9 @@ mod tests {
         $(
             #[test]
             fn $name() {
-                let b1 = &mut BytesMut::with_capacity(0);
+                let b1 = &mut BytesMut::with_capacity(($test).encoded_size());
                 ($test).encode(b1);
-                assert_eq!(Ok($expected), $kind::decode(b1).to_full_result());
+                assert_eq!($expected, unwrap_value($kind::decode(b1)));
             }
         )*
         }
@@ -524,8 +524,8 @@ mod tests {
          variant_long_big: Variant, Variant::Long(-2147483647_i64), Variant::Long(-2147483647_i64),
          variant_long_small: Variant, Variant::Long(-128_i64), Variant::Long(-128_i64),
 
-         variant_float: Variant, Variant::Float(1.234_f32), Variant::Float(1.234_f32),
-         variant_double: Variant, Variant::Double(1.234_f64), Variant::Double(1.234_f64),
+         variant_float: Variant, Variant::Float(OrderedFloat(1.234_f32)), Variant::Float(OrderedFloat(1.234_f32)),
+         variant_double: Variant, Variant::Double(OrderedFloat(1.234_f64)), Variant::Double(OrderedFloat(1.234_f64)),
 
          variant_char: Variant, Variant::Char('💯'), Variant::Char('💯'),
 
@@ -542,36 +542,34 @@ mod tests {
          variant_symbol_long: Variant, Variant::Symbol(Symbol::from(LOREM)), Variant::Symbol(Symbol::from(LOREM)),
     }
 
-    #[test]
-    fn test_null() {
-        let mut b = BytesMut::with_capacity(0);
-        Null.encode(&mut b);
-        let t = Null::decode(&mut b).to_full_result();
-        assert_eq!(Ok(Null), t);
+    fn unwrap_value<T>(res: Result<(&[u8], T)>) -> T {
+        let r = res.map(|(i, o)| o);
+        assert!(r.is_ok());
+        r.unwrap()
     }
 
     #[test]
     fn test_bool_true() {
         let b1 = &mut BytesMut::with_capacity(0);
         b1.put_u8(0x41);
-        assert_eq!(Ok(true), bool::decode(b1).to_full_result());
+        assert_eq!(true, unwrap_value(bool::decode(b1)));
 
         let b2 = &mut BytesMut::with_capacity(0);
         b2.put_u8(0x56);
         b2.put_u8(0x01);
-        assert_eq!(Ok(true), bool::decode(b2).to_full_result());
+        assert_eq!(true, unwrap_value(bool::decode(b2)));
     }
 
     #[test]
     fn test_bool_false() {
         let b1 = &mut BytesMut::with_capacity(0);
         b1.put_u8(0x42u8);
-        assert_eq!(Ok(false), bool::decode(b1).to_full_result());
+        assert_eq!(false, unwrap_value(bool::decode(b1)));
 
         let b2 = &mut BytesMut::with_capacity(0);
         b2.put_u8(0x56);
         b2.put_u8(0x00);
-        assert_eq!(Ok(false), bool::decode(b2).to_full_result());
+        assert_eq!(false, unwrap_value(bool::decode(b2)));
     }
 
     /// UTC with a precision of milliseconds. For example, 1311704463521
@@ -583,7 +581,7 @@ mod tests {
         datetime.encode(b1);
 
         let expected = Utc.ymd(2011, 7, 26).and_hms_milli(18, 21, 3, 521);
-        assert_eq!(Ok(expected), DateTime::<Utc>::decode(b1).to_full_result());
+        assert_eq!(expected, unwrap_value(DateTime::<Utc>::decode(b1)));
     }
 
     #[test]
@@ -593,15 +591,15 @@ mod tests {
         datetime.encode(b1);
 
         let expected = Utc.ymd(1968, 7, 26).and_hms_milli(18, 21, 3, 521);
-        assert_eq!(Ok(expected), DateTime::<Utc>::decode(b1).to_full_result());
+        assert_eq!(expected, unwrap_value(DateTime::<Utc>::decode(b1)));
     }
 
     #[test]
     fn variant_null() {
         let mut b = BytesMut::with_capacity(0);
         Variant::Null.encode(&mut b);
-        let t = Variant::decode(&mut b).to_full_result();
-        assert_eq!(Ok(Variant::Null), t);
+        let t = unwrap_value(Variant::decode(&mut b));
+        assert_eq!(Variant::Null, t);
     }
 
     #[test]
@@ -609,16 +607,16 @@ mod tests {
         let b1 = &mut BytesMut::with_capacity(0);
         b1.put_u8(0x41);
         assert_eq!(
-            Ok(Variant::Boolean(true)),
-            Variant::decode(b1).to_full_result()
+            Variant::Boolean(true),
+            unwrap_value(Variant::decode(b1))
         );
 
         let b2 = &mut BytesMut::with_capacity(0);
         b2.put_u8(0x56);
         b2.put_u8(0x01);
         assert_eq!(
-            Ok(Variant::Boolean(true)),
-            Variant::decode(b2).to_full_result()
+            Variant::Boolean(true),
+            unwrap_value(Variant::decode(b2))
         );
     }
 
@@ -627,16 +625,16 @@ mod tests {
         let b1 = &mut BytesMut::with_capacity(0);
         b1.put_u8(0x42u8);
         assert_eq!(
-            Ok(Variant::Boolean(false)),
-            Variant::decode(b1).to_full_result()
+            Variant::Boolean(false),
+            unwrap_value(Variant::decode(b1))
         );
 
         let b2 = &mut BytesMut::with_capacity(0);
         b2.put_u8(0x56);
         b2.put_u8(0x00);
         assert_eq!(
-            Ok(Variant::Boolean(false)),
-            Variant::decode(b2).to_full_result()
+            Variant::Boolean(false),
+            unwrap_value(Variant::decode(b2))
         );
     }
 
@@ -650,8 +648,8 @@ mod tests {
 
         let expected = Utc.ymd(2011, 7, 26).and_hms_milli(18, 21, 3, 521);
         assert_eq!(
-            Ok(Variant::Timestamp(expected)),
-            Variant::decode(b1).to_full_result()
+            Variant::Timestamp(expected),
+            unwrap_value(Variant::decode(b1))
         );
     }
 
@@ -663,8 +661,8 @@ mod tests {
 
         let expected = Utc.ymd(1968, 7, 26).and_hms_milli(18, 21, 3, 521);
         assert_eq!(
-            Ok(Variant::Timestamp(expected)),
-            Variant::decode(b1).to_full_result()
+            Variant::Timestamp(expected),
+            unwrap_value(Variant::decode(b1))
         );
     }
 
@@ -674,8 +672,8 @@ mod tests {
         Some(42i8).encode(b1);
 
         assert_eq!(
-            Ok(Some(42)),
-            Option::<i8>::decode(b1).to_full_result()
+            Some(42),
+            unwrap_value(Option::<i8>::decode(b1))
         );
 
         let b2 = &mut BytesMut::with_capacity(0);
@@ -683,8 +681,8 @@ mod tests {
         o1.encode(b2);
 
         assert_eq!(
-            Ok(None),
-            Option::<i8>::decode(b2).to_full_result()
+            None,
+            unwrap_value(Option::<i8>::decode(b2))
         );
     }
 
@@ -694,8 +692,8 @@ mod tests {
         Some(ByteStr::from("hello")).encode(b1);
 
         assert_eq!(
-            Ok(Some(ByteStr::from("hello"))),
-            Option::<ByteStr>::decode(b1).to_full_result()
+            Some(ByteStr::from("hello")),
+            unwrap_value(Option::<ByteStr>::decode(b1))
         );
 
         let b2 = &mut BytesMut::with_capacity(0);
@@ -703,8 +701,8 @@ mod tests {
         o1.encode(b2);
 
         assert_eq!(
-            Ok(None),
-            Option::<ByteStr>::decode(b2).to_full_result()
+            None,
+            unwrap_value(Option::<ByteStr>::decode(b2))
         );
     }
 }

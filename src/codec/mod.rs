@@ -1,12 +1,12 @@
 use std::marker::Sized;
 
 use bytes::BytesMut;
-use super::errors::{Result, into_result};
+use super::errors::Result;
 
 macro_rules! decode_check_len {
     ($buf:ident, $size:expr) => {
         if $buf.len() < $size {
-            return Err(::errors::Error::from_kind(::errors::ErrorKind::Incomplete(::nom::Needed::Size($size))));
+            return Err(::errors::Error::from_kind(::errors::ErrorKind::Incomplete(Some($size))));
         }
     };
 }
@@ -15,8 +15,8 @@ macro_rules! decode_check_len {
 mod decode;
 mod encode;
 
-pub use self::decode::{INVALID_FORMATCODE, INVALID_DESCRIPTOR};
-pub(crate) use self::decode::{decode_list_header, decode_map_header};
+pub use self::decode::INVALID_DESCRIPTOR;
+pub(crate) use self::decode::decode_list_header;
 
 pub trait Encode {
     fn encoded_size(&self) -> usize;
@@ -40,12 +40,6 @@ pub trait DecodeFormatted
 {
     fn decode_with_format(input: &[u8], fmt: u8) -> Result<(&[u8], Self)>;
 }
-
-// pub trait DecodeDescribed
-//     where Self: Sized
-// {
-//     fn decode_with_descriptor(input: &[u8], descriptor: Descriptor) -> Result<(&[u8], Self)>;
-// }
 
 impl<T: DecodeFormatted> Decode for T {
     fn decode(input: &[u8]) -> Result<(&[u8], Self)> {

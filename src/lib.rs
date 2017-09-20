@@ -1,19 +1,15 @@
 #![feature(proc_macro, conservative_impl_trait, generators)]
 #![feature(trace_macros)]
 
-extern crate futures_await as futures;
 extern crate bytes;
 extern crate chrono;
-#[macro_use]
-extern crate nom;
 extern crate uuid;
 extern crate ordered_float;
 #[macro_use]
 extern crate error_chain;
 extern crate tokio_io;
-extern crate hex_slice;
 
-use futures::prelude::*;
+//use futures::prelude::*;
 
 #[macro_use]
 pub mod codec;

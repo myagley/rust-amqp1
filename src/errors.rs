@@ -1,31 +1,23 @@
-use nom::{IResult, IError};
+#![allow(unused_doc_comment)]
 
 error_chain!{
     errors {
-        Incomplete(n: ::nom::Needed) {
+        Incomplete(n: Option<usize>) {
             description("More data required during frame parsing")
             display("More data required during frame parsing: '{:?}'", n)
+        }
+        InvalidFormatCode(code: u8) {
+            description("Unexpected format code")
+            display("Unexpected format code: '{}'", code)
+        }
+        InvalidDescriptor(descriptor: ::types::Descriptor) {
+            description("Unexpected descriptor")
+            display("Unexpected descriptor: '{:?}'", descriptor)
         }
     }
     foreign_links{
         Io(::std::io::Error);
-        NomError(::nom::ErrorKind);
         UuidParseError(::uuid::ParseError);
         Utf8Error(::std::str::Utf8Error);
-    }
-}
-
-pub fn into_result<I, O>(value: IResult<I, O>) -> Result<(I, O)> {
-    match value {
-        IResult::Done(i, o) => Ok((i, o)),
-        IResult::Error(e) => Err(Error::from_kind(ErrorKind::NomError(e))),
-        IResult::Incomplete(n) => Err(Error::from_kind(ErrorKind::Incomplete(n)))
-    }
-}
-
-pub fn into_iresult<I, O>(value: Result<(I, O)>) -> IResult<I, O> {
-    match value {
-        Ok((i, o)) => IResult::Done(i, o),
-        Err(e) => unimplemented!()
     }
 }

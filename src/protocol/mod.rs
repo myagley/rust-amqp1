@@ -1,10 +1,9 @@
-use bytes::{BigEndian, Buf, BufMut, Bytes, BytesMut};
+use bytes::{Bytes, BytesMut, BufMut};
 use super::errors::*;
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 use uuid::Uuid;
-use nom::ErrorKind;
-use super::codec::{self, decode_format_code, decode_list_header, decode_map_header, Decode, DecodeFormatted, Encode, INVALID_FORMATCODE};
+use super::codec::{self, DecodeFormatted, Encode};
 use super::types::*;
 use std::u8;
 
@@ -23,7 +22,7 @@ pub const PROTOCOL_HEADER_LEN: usize = 8;
 const PROTOCOL_HEADER_PREFIX: &'static [u8] = b"AMQP";
 const PROTOCOL_VERSION: &'static [u8] = &[1, 0, 0];
 
-#[derive(Debug, PartialEq, Eq, Hash)]
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub enum ProtocolId {
     Amqp = 0,
     AmqpTls = 2,
@@ -62,7 +61,10 @@ pub type Timestamp = DateTime<Utc>;
 pub type Symbols = Multiple<Symbol>;
 pub type IetfLanguageTags = Multiple<IetfLanguageTag>;
 
-include!(concat!(env!("OUT_DIR"), "/definitions.rs"));
+mod definitions;
+pub use self::definitions::*;
+
+//include!(concat!(env!("OUT_DIR"), "/definitions.rs"));
 
 #[derive(Debug, Hash, Eq, PartialEq, Clone)]
 pub enum AnnotationKey {
@@ -81,13 +83,13 @@ pub enum MessageId {
 }
 
 impl DecodeFormatted for MessageId {
-    fn decode_with_format(input: &[u8], format: u8) -> Result<(&[u8], Self)> {
-        match format {
-            codec::FORMATCODE_SMALLULONG | codec::FORMATCODE_ULONG | codec::FORMATCODE_ULONG_0 => u64::decode_with_format(input, format).map(|(i, o)| (i, MessageId::Ulong(o))),
-            codec::FORMATCODE_UUID => Uuid::decode_with_format(input, format).map(|(i, o)| (i, MessageId::Uuid(o))),
-            codec::FORMATCODE_BINARY8 | codec::FORMATCODE_BINARY32 => Bytes::decode_with_format(input, format).map(|(i, o)| (i, MessageId::Binary(o))),
-            codec::FORMATCODE_STRING8 | codec::FORMATCODE_STRING32 => ByteStr::decode_with_format(input, format).map(|(i, o)| (i, MessageId::String(o))),
-            _ => Err(ErrorKind::Custom(codec::INVALID_FORMATCODE).into()),
+    fn decode_with_format(input: &[u8], fmt: u8) -> Result<(&[u8], Self)> {
+        match fmt {
+            codec::FORMATCODE_SMALLULONG | codec::FORMATCODE_ULONG | codec::FORMATCODE_ULONG_0 => u64::decode_with_format(input, fmt).map(|(i, o)| (i, MessageId::Ulong(o))),
+            codec::FORMATCODE_UUID => Uuid::decode_with_format(input, fmt).map(|(i, o)| (i, MessageId::Uuid(o))),
+            codec::FORMATCODE_BINARY8 | codec::FORMATCODE_BINARY32 => Bytes::decode_with_format(input, fmt).map(|(i, o)| (i, MessageId::Binary(o))),
+            codec::FORMATCODE_STRING8 | codec::FORMATCODE_STRING32 => ByteStr::decode_with_format(input, fmt).map(|(i, o)| (i, MessageId::String(o))),
+            _ => Err(ErrorKind::InvalidFormatCode(fmt).into()),
         }
     }
 }

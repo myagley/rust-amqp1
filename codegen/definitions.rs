@@ -1,3 +1,12 @@
+#![allow(unused_variables, unused_assignments, unused_mut, unreachable_patterns)]
+
+use bytes::{BigEndian, BufMut, Bytes, BytesMut};
+use ::errors::Result;
+use uuid::Uuid;
+use ::codec::{self, decode_format_code, decode_list_header, Decode, DecodeFormatted, Encode};
+use std::u8;
+use super::*;
+
 {{#each defs.provides as |provide|}}
 {{#if provide.described}}
 #[derive(Clone, Debug, PartialEq)]
@@ -17,7 +26,7 @@ impl DecodeFormatted for {{provide.name}} {
             {{#each provide.options as |option|}}
             Descriptor::Symbol(ref a) if a.as_str() == "{{option.descriptor.name}}" => decode_{{snake option.ty}}_inner(input).map(|(i, r)| (i, {{provide.name}}::{{option.ty}}(r))),
             {{/each}}
-            _ => Err(ErrorKind::Custom(codec::INVALID_DESCRIPTOR).into())
+            _ => Err(ErrorKind::InvalidDescriptor(descriptor).into())
         }
     }
 }
@@ -105,14 +114,20 @@ impl Encode for {{enum.name}} {
     fn encoded_size(&self) -> usize {
         match *self {
             {{#each enum.items as |item|}}
-            {{enum.name}}::{{item.name}} => {{item.value}}.encoded_size(),
+            {{enum.name}}::{{item.name}} => {
+                let v : {{enum.ty}} = {{item.value}};
+                v.encoded_size()
+            },
             {{/each}}
         }
     }
     fn encode(&self, buf: &mut BytesMut) {
         match *self {
             {{#each enum.items as |item|}}
-            {{enum.name}}::{{item.name}} => {{item.value}}.encode(buf),
+            {{enum.name}}::{{item.name}} => {
+                let v : {{enum.ty}} = {{item.value}};
+                v.encode(buf);
+            },
             {{/each}}
         }
     }
@@ -180,8 +195,6 @@ impl {{list.name}} {
     const FIELD_COUNT: usize = 0 {{#each list.fields as |field|}} + 1{{/each}};
 }
 fn decode_{{snake list.name}}_inner(input: &[u8]) -> Result<(&[u8], {{list.name}})> {
-    use hex_slice::AsHex;
-    println!("decoding: {:x}", input.as_hex());
     let (input, format) = decode_format_code(input)?;
     let (input, header) = decode_list_header(input, format)?;
     let size = header.size as usize;
@@ -233,8 +246,29 @@ fn decode_{{snake list.name}}_inner(input: &[u8]) -> Result<(&[u8], {{list.name}
     }))
 }
 
-fn encoded_size_{{snake list.name}}_inner(list: &{{list.name}}) -> usize { list.encoded_size() }
-fn encode_{{snake list.name}}_inner(list: &{{list.name}}, buf: &mut BytesMut) { list.encode(buf) }
+fn encoded_size_{{snake list.name}}_inner(list: &{{list.name}}) -> usize {
+    let content_size = 0 {{#each list.fields as |field|}} + list.{{field.name}}.encoded_size(){{/each}};
+    // header: 0x00 0x53 <descriptor code> format_code size count
+    (if content_size + 1 > u8::MAX as usize { 12 } else { 6 })
+        + content_size
+}
+fn encode_{{snake list.name}}_inner(list: &{{list.name}}, buf: &mut BytesMut) {
+    Descriptor::Ulong({{list.descriptor.code}}).encode(buf);
+    let content_size = 0 {{#each list.fields as |field|}} + list.{{field.name}}.encoded_size(){{/each}};
+    if content_size + 1 > u8::MAX as usize {
+        buf.put_u8(codec::FORMATCODE_LIST32);
+        buf.put_u32::<BigEndian>((content_size + 4) as u32); // +4 for 4 byte count
+        buf.put_u32::<BigEndian>({{list.name}}::FIELD_COUNT as u32);
+    }
+    else {
+        buf.put_u8(codec::FORMATCODE_LIST8);
+        buf.put_u8((content_size + 1) as u8);
+        buf.put_u8({{list.name}}::FIELD_COUNT as u8);
+    }
+    {{#each list.fields as |field|}}
+    list.{{field.name}}.encode(buf);
+    {{/each}}
+}
 
 impl DecodeFormatted for {{list.name}} {
     fn decode_with_format(input: &[u8], fmt: u8) -> Result<(&[u8], Self)> {
@@ -250,29 +284,8 @@ impl DecodeFormatted for {{list.name}} {
 }
 
 impl Encode for {{list.name}} {
-    fn encoded_size(&self) -> usize {
-        let content_size = 0 {{#each list.fields as |field|}} + self.{{field.name}}.encoded_size(){{/each}};
-        // header: 0x00 0x53 <descriptor code> format_code size count
-        (if content_size > u8::MAX as usize { 12 } else { 6 })
-            + content_size
-    }
+    fn encoded_size(&self) -> usize { encoded_size_{{snake list.name}}_inner(self) }
 
-    fn encode(&self, buf: &mut BytesMut) {
-        Descriptor::Ulong({{list.descriptor.code}}).encode(buf);
-        let content_size = 0 {{#each list.fields as |field|}} + self.{{field.name}}.encoded_size(){{/each}};
-        if content_size > u8::MAX as usize {
-            buf.put_u8(codec::FORMATCODE_LIST32);
-            buf.put_u32::<BigEndian>(content_size as u32);
-            buf.put_u32::<BigEndian>(Self::FIELD_COUNT as u32);
-        }
-        else {
-            buf.put_u8(codec::FORMATCODE_LIST8);
-            buf.put_u8(content_size as u8);
-            buf.put_u8(Self::FIELD_COUNT as u8);
-        }
-        {{#each list.fields as |field|}}
-        self.{{field.name}}.encode(buf);
-        {{/each}}
-    }
+    fn encode(&self, buf: &mut BytesMut) { encode_{{snake list.name}}_inner(self, buf) }
 }
 {{/each}}

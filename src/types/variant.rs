@@ -83,7 +83,7 @@ impl VariantMap {
 }
 
 impl Hash for VariantMap {
-    fn hash<H: Hasher>(&self, state: &mut H) {
+    fn hash<H: Hasher>(&self, _state: &mut H) {
         unimplemented!()
     }
 }

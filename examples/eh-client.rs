@@ -6,6 +6,8 @@ extern crate futures_await as futures;
 extern crate hex_slice;
 extern crate tokio_core;
 extern crate tokio_io;
+extern crate native_tls;
+extern crate tokio_tls;
 extern crate uuid;
 
 use futures::prelude::*;
@@ -15,17 +17,25 @@ use tokio_io::{AsyncRead, AsyncWrite};
 use tokio_io::io::{read_exact, write_all};
 use std::net::SocketAddr;
 use futures::{Future, Sink, Stream};
-use amqp::{Error, Result, ResultExt};
+use amqp::{Error, ErrorKind, Result, ResultExt};
 use amqp::types::{Symbol, ByteStr};
 use amqp::io::{AmqpDecoder, AmqpEncoder};
 use amqp::protocol::{self, decode_protocol_header, encode_protocol_header, ProtocolId};
 use amqp::framing::{AmqpFrame, SaslFrame};
-use amqp::protocol::{Frame, SaslCode, SaslFrameBody, SaslInit, SaslOutcome};
+use amqp::protocol::{Frame, SaslCode, SaslFrameBody, SaslInit, SaslOutcome, Section};
 use amqp::codec::Encode;
 use bytes::{Bytes, BytesMut};
 use hex_slice::AsHex;
 use uuid::Uuid;
+use native_tls::TlsConnector;
+use tokio_tls::TlsConnectorExt;
+use std::net::ToSocketAddrs;
 
+const SASL_ID: &str = "";
+const SASL_KEY: &str = "";
+const HOST_NAME: &str = "";
+const EVENT_HUB_NAME: &str = "";
+const PARTITION: &str = "";
 
 fn main() {
     let mut core = Core::new().unwrap();
@@ -36,11 +46,52 @@ fn main() {
 
 #[async]
 fn send(handle: Handle) -> Result<()> {
-    let addr = "127.0.0.1:5769".parse().unwrap();
-    let tcp = await!(TcpStream::connect(&addr, &handle))?;
-    let (mut reader, mut writer) = tcp.split();
+    let addr = format!("{}:5671", HOST_NAME).to_socket_addrs().unwrap().next().unwrap();
+    let socket = await!(TcpStream::connect(&addr, &handle))?;
+    let tls_context = TlsConnector::builder().unwrap().build().unwrap();
+    let tls = await!(tls_context.connect_async(HOST_NAME, socket).map_err(|e| Error::with_chain(e, ErrorKind::Msg("TLS handshake failed".into()))))?;
+    let (mut reader, mut writer) = tls.split();
 
-    // negotiating SASL exchange
+    let (reader, writer) = await!(sasl_auth("".into(), SASL_ID.into(), SASL_KEY.into(), reader, writer))?;
+
+    let (reader, writer) = await!(negotiate_protocol(ProtocolId::Amqp, reader, writer))?;
+
+    let reader = tokio_io::codec::FramedRead::new(reader, AmqpDecoder::<AmqpFrame>::new());
+    let writer = tokio_io::codec::FramedWrite::new(writer, AmqpEncoder::<AmqpFrame>::new());
+
+    let (reader, writer) = await!(open_connection(HOST_NAME.into(), reader, writer))?;
+    let (channel, reader, writer) = await!(begin_session(reader, writer))?;
+    let (handle, reader, writer) = await!(attach_link(channel, EVENT_HUB_NAME.into(), PARTITION.into(), reader, writer))?;
+    let (frame_opt, reader) = await!(reader.into_future()).map_err(|e| e.0)?; // todo: handle flow better
+    println!("last seen: {:?}", frame_opt); // wait for flow
+    let (delivery_tag, writer) = await!(transfer(channel, handle, Bytes::from(vec![1,2,3,4,5,6]), reader, writer))?;
+    println!("transfer is completed.");
+
+    Ok(())
+}
+
+#[async]
+fn negotiate_protocol<TR: AsyncRead + 'static, TW: AsyncWrite + 'static>(protocol_id: ProtocolId, reader: TR, writer: TW) -> Result<(TR, TW)> {
+    let header_buf = encode_protocol_header(protocol_id);
+    let (writer, _) = await!(write_all(writer, header_buf))?;
+    let mut header_buf = [0; 8];
+    let (reader, header_buf) = await!(read_exact(reader, header_buf))?;
+    let recv_protocol_id = decode_protocol_header(&header_buf)?; // todo: surface for higher level to be able to respond properly / validate
+    if recv_protocol_id != protocol_id {
+        return Err(
+            format!(
+                "Expected `{:?}` protocol id, seen `{:?} instead.`",
+                protocol_id,
+                recv_protocol_id
+            ).into(),
+        );
+    }
+    Ok((reader, writer))
+}
+
+/// negotiating SASL authentication
+#[async]
+fn sasl_auth<TR: AsyncRead + 'static, TW: AsyncWrite + 'static>(authz_id: String, authn_id: String, password: String, reader: TR, writer: TW) -> Result<(TR, TW)> {
     let (reader, writer) = await!(negotiate_protocol(ProtocolId::AmqpSasl, reader, writer))?;
 
     let sasl_reader = tokio_io::codec::FramedRead::new(reader, AmqpDecoder::<SaslFrame>::new());
@@ -54,7 +105,6 @@ fn send(handle: Handle) -> Result<()> {
     {
         if !mechs
             .sasl_server_mechanisms()
-            .0
             .iter()
             .any(|m| *m == plain_symbol)
         {
@@ -75,7 +125,7 @@ fn send(handle: Handle) -> Result<()> {
     }
     // sending sasl-init
     let sasl_writer = tokio_io::codec::FramedWrite::new(writer, AmqpEncoder::<SaslFrame>::new());
-    let initial_response = SaslInit::prepare_response("", "duggie", "pow wow");
+    let initial_response = SaslInit::prepare_response(&authz_id, &authn_id, &password);
     let sasl_init = SaslInit {
         mechanism: plain_symbol,
         initial_response: Some(initial_response),
@@ -112,54 +162,20 @@ fn send(handle: Handle) -> Result<()> {
 
     let writer = sasl_writer.into_inner();
     let reader = sasl_reader.into_inner();
-    let (reader, writer) = await!(negotiate_protocol(ProtocolId::Amqp, reader, writer))?;
-
-    let reader = tokio_io::codec::FramedRead::new(reader, AmqpDecoder::<AmqpFrame>::new());
-    let writer = tokio_io::codec::FramedWrite::new(writer, AmqpEncoder::<AmqpFrame>::new());
-
-    let (reader, writer) = await!(open_connection(reader, writer))?;
-    let (channel, reader, writer) = await!(begin_session(reader, writer))?;
-    let (handle, reader, writer) = await!(attach_link(channel, reader, writer))?;
-    let (delivery_tag, writer) = await!(transfer(writer, channel, handle, Bytes::from(vec![1,2,3,4,5,6])))?;
-    println!("sent transfer: {:2x}", delivery_tag.as_ref().as_hex());
-    let (frame_opt, reader) = await!(reader.into_future()).map_err(|e| e.0)?;
-    println!("last seen: {:?}", frame_opt); // wait for flow
-    let (frame_opt, reader) = await!(reader.into_future()).map_err(|e| e.0)?;
-    println!("last seen #2: {:?}", frame_opt); // wait for flow
-
-    Ok(())
-}
-
-#[async]
-fn negotiate_protocol<TR: AsyncRead + 'static, TW: AsyncWrite + 'static>(protocol_id: ProtocolId, reader: TR, writer: TW) -> Result<(TR, TW)> {
-    let header_buf = encode_protocol_header(protocol_id);
-    let (writer, _) = await!(write_all(writer, header_buf))?;
-    let mut header_buf = [0; 8];
-    let (reader, header_buf) = await!(read_exact(reader, header_buf))?;
-    let recv_protocol_id = decode_protocol_header(&header_buf)?; // todo: surface for higher level to be able to respond properly / validate
-    if recv_protocol_id != protocol_id {
-        return Err(
-            format!(
-                "Expected `{:?}` protocol id, seen `{:?} instead.`",
-                protocol_id,
-                recv_protocol_id
-            ).into(),
-        );
-    }
     Ok((reader, writer))
 }
 
 #[async]
-fn open_connection<FR, FW>(reader: FR, writer: FW) -> Result<(FR, FW)>
+fn open_connection<FR, FW>(hostname: String, reader: FR, writer: FW) -> Result<(FR, FW)>
     where FR: Stream<Item = AmqpFrame, Error = Error> + 'static,
         FW: Sink<SinkItem = AmqpFrame, SinkError = Error> + 'static
 {
     let open = protocol::Open {
-        container_id: "container-id".into(),
-        hostname: None,
+        container_id: ByteStr::from(&Uuid::new_v4().simple().to_string()[..]),
+        hostname: Some(ByteStr::from(&hostname[..])),
         max_frame_size: ::std::u16::MAX as u32,
         channel_max: ::std::u16::MAX,
-        idle_time_out: None,
+        idle_time_out: Some(2 * 60 * 1000),
         outgoing_locales: None,
         incoming_locales: None,
         offered_capabilities: None,
@@ -191,8 +207,8 @@ fn begin_session<FR, FW>(reader: FR, writer: FW) -> Result<(u16, FR, FW)>
     let begin = protocol::Begin {
         remote_channel: None,
         next_outgoing_id: 1,
-        incoming_window: 5000,
-        outgoing_window: 5000,
+        incoming_window: ::std::u32::MAX,
+        outgoing_window: ::std::u32::MAX,
         handle_max: ::std::u32::MAX,
         offered_capabilities: None,
         desired_capabilities: None,
@@ -221,12 +237,12 @@ fn begin_session<FR, FW>(reader: FR, writer: FW) -> Result<(u16, FR, FW)>
 }
 
 #[async]
-fn attach_link<FR, FW>(channel: u16, reader: FR, writer: FW) -> Result<(u32, FR, FW)>
+fn attach_link<FR, FW>(channel: u16, event_hub_name: String, partition: String, reader: FR, writer: FW) -> Result<(u32, FR, FW)>
     where FR: Stream<Item = AmqpFrame, Error = Error> + 'static,
         FW: Sink<SinkItem = AmqpFrame, SinkError = Error> + 'static
 {
     let target = protocol::Target {
-        address: Some(ByteStr::from_static("par-pref/control/7dddd1cd-64b8-4388-b5d0-cd2efb577596")),
+        address: Some(ByteStr::from(&format!("{}/Partitions/{}", event_hub_name, partition)[..])),
         durable: protocol::TerminusDurability::None,
         expiry_policy: protocol::TerminusExpiryPolicy::SessionEnd,
         timeout: 0,
@@ -238,7 +254,7 @@ fn attach_link<FR, FW>(channel: u16, reader: FR, writer: FW) -> Result<(u32, FR,
         name: ByteStr::from_static("CtlReq_"),
         handle: 0,
         role: protocol::Role::Sender,
-        snd_settle_mode: protocol::SenderSettleMode::Settled,
+        snd_settle_mode: protocol::SenderSettleMode::Mixed,
         rcv_settle_mode: protocol::ReceiverSettleMode::First,
         source: None,
         target: Some(target),
@@ -268,8 +284,9 @@ fn attach_link<FR, FW>(channel: u16, reader: FR, writer: FW) -> Result<(u32, FR,
 }
 
 #[async]
-fn transfer<FW>(writer: FW, channel: u16, handle: protocol::Handle, payload: Bytes) -> Result<(Bytes, FW)>
-    where FW: Sink<SinkItem = AmqpFrame, SinkError = Error> + 'static
+fn transfer<FR, FW>(channel: u16, handle: protocol::Handle, payload: Bytes, reader: FR, writer: FW) -> Result<(FR, FW)>
+    where FR: Stream<Item = AmqpFrame, Error = Error> + 'static,
+        FW: Sink<SinkItem = AmqpFrame, SinkError = Error> + 'static
 {
     let delivery_tag = Bytes::from(&Uuid::new_v4().as_bytes()[..]);
     let transfer = protocol::Transfer {
@@ -277,7 +294,7 @@ fn transfer<FW>(writer: FW, channel: u16, handle: protocol::Handle, payload: Byt
         delivery_id: Some(0),
         delivery_tag: Some(delivery_tag.clone()),
         message_format: None,
-        settled: Some(true),
+        settled: Some(false),
         more: false,
         rcv_settle_mode: None,
         state: None,
@@ -286,24 +303,20 @@ fn transfer<FW>(writer: FW, channel: u16, handle: protocol::Handle, payload: Byt
         batchable: false
     };
     let mut payload_section = BytesMut::with_capacity(payload.encoded_size());
-    payload.encode(&mut payload_section);
+    Section::Data(payload).encode(&mut payload_section);
     let writer = await!(writer.send(AmqpFrame::new(channel, Frame::Transfer(transfer), payload_section.freeze())))?;
-    Ok((delivery_tag, writer))
+    let (frame_opt, reader) = await!(reader.into_future()).map_err(|e| e.0)?;
 
-
-
-
-    // let (frame_opt, reader) = await!(reader.into_future()).map_err(|e| e.0)?;
-    // if let Some(frame) = frame_opt {
-    //     println!("{:?}", frame);
-    //     if let Frame::Attach(ref attach) = *frame.performative() {
-    //         Ok((attach.handle(), reader, writer))
-    //     }
-    //     else {
-    //         Err(format!("Expected Attach performative to arrive, seen `{:?}` instead.", frame).into())
-    //     }
-    // }
-    // else {
-    //     Err("Connection is closed.".into())
-    // }
+    if let Some(frame) = frame_opt {
+        println!("{:?}", frame);
+        if let Frame::Disposition(ref disposition) = *frame.performative() {
+            Ok((reader, writer))
+        }
+        else {
+            Err(format!("Expected Disposition performative to arrive, seen `{:?}` instead.", frame).into())
+        }
+    }
+    else {
+        Err("Connection is closed.".into())
+    }
 }

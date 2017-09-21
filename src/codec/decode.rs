@@ -4,7 +4,7 @@ use bytes::{BigEndian, ByteOrder, Bytes};
 use chrono::{DateTime, TimeZone, Utc};
 use codec::{self, DecodeFormatted, Decode};
 use framing::{self, AmqpFrame, SaslFrame, HEADER_LEN};
-use types::{ByteStr, Descriptor, Symbol, Multiple, Variant, VariantMap};
+use types::{ByteStr, Descriptor, List, Symbol, Multiple, Variant, VariantMap};
 use uuid::Uuid;
 use ordered_float::OrderedFloat;
 use protocol::{self, CompoundHeader};
@@ -243,42 +243,16 @@ impl<K: Decode + Eq + Hash, V: Decode> DecodeFormatted for HashMap<K, V> {
 
 impl<T: DecodeFormatted> DecodeFormatted for Vec<T> {
     fn decode_with_format(input: &[u8], fmt: u8) -> Result<(&[u8], Self)> {
-        let size: usize;
-        let count: usize;
-        let mut arr_input: &[u8];
-        let remainder: &[u8];
-        match fmt {
-            codec::FORMATCODE_ARRAY8 => {
-                decode_check_len!(input, 2);
-                size = input[0] as usize;
-                count = input[1] as usize;
-                decode_check_len!(input, size + 2);
-                let split_in = input[2..].split_at(size);
-                arr_input = &split_in.0;
-                remainder = split_in.1;
-            },
-            codec::FORMATCODE_ARRAY32 =>{
-                decode_check_len!(input, 8);
-                size = BigEndian::read_u32(input) as usize;
-                count = BigEndian::read_u32(&input[4..]) as usize;
-                decode_check_len!(input, size + 8);
-                let split_in = input[8..].split_at(size);
-                arr_input = &split_in.0;
-                remainder = split_in.1;
-            },
-            _ => {
-                return Err(ErrorKind::InvalidFormatCode(fmt).into());
-            }
-        }
-        let item_fmt = arr_input[0]; // todo: support descriptor
-        arr_input = &arr_input[1..];
-        let mut result: Vec<T> = Vec::with_capacity(count);
-        for _ in 0..count {
-            let (new_input, decoded) = T::decode_with_format(arr_input, item_fmt)?;
+        let (input, header) = decode_array_header(input, fmt)?;
+        let item_fmt = input[0]; // todo: support descriptor
+        let mut input = &input[1..];
+        let mut result: Vec<T> = Vec::with_capacity(header.count as usize);
+        for _ in 0..header.count {
+            let (new_input, decoded) = T::decode_with_format(input, item_fmt)?;
             result.push(decoded);
-            arr_input = new_input;
+            input = new_input;
         }
-        Ok((remainder, result))
+        Ok((input, result))
     }
 }
 
@@ -294,6 +268,19 @@ impl<T: DecodeFormatted> DecodeFormatted for Multiple<T> {
                 Ok((input, Multiple(vec![item])))
             }
         }
+    }
+}
+
+impl DecodeFormatted for List {
+    fn decode_with_format(input: &[u8], fmt: u8) -> Result<(&[u8], Self)> {
+        let (mut input, header) = decode_list_header(input, fmt)?;
+        let mut result: Vec<Variant> = Vec::with_capacity(header.count as usize);
+        for _ in 0..header.count {
+            let (new_input, decoded) = Variant::decode(input)?;
+            result.push(decoded);
+            input = new_input;
+        }
+        Ok((input, List(result)))
     }
 }
 
@@ -332,13 +319,18 @@ impl DecodeFormatted for Variant {
             codec::FORMATCODE_STRING32 => ByteStr::decode_with_format(input, fmt).map(|(i, o)| (i, Variant::String(o))),
             codec::FORMATCODE_SYMBOL8 => Symbol::decode_with_format(input, fmt).map(|(i, o)| (i, Variant::Symbol(o))),
             codec::FORMATCODE_SYMBOL32 => Symbol::decode_with_format(input, fmt).map(|(i, o)| (i, Variant::Symbol(o))),
-            // codec::FORMATCODE_LIST0 => x::decode_with_format(input, fmt).map(|(i, o)| (i, Variant::List(o))),
-            // codec::FORMATCODE_LIST8 => x::decode_with_format(input, fmt).map(|(i, o)| (i, Variant::List(o))),
-            // codec::FORMATCODE_LIST32 => x::decode_with_format(input, fmt).map(|(i, o)| (i, Variant::List(o))),
+            codec::FORMATCODE_LIST0 => Ok((input, Variant::List(List(vec![])))),
+            codec::FORMATCODE_LIST8 => List::decode_with_format(input, fmt).map(|(i, o)| (i, Variant::List(o))),
+            codec::FORMATCODE_LIST32 => List::decode_with_format(input, fmt).map(|(i, o)| (i, Variant::List(o))),
             codec::FORMATCODE_MAP8 => HashMap::<Variant, Variant>::decode_with_format(input, fmt).map(|(i, o)| (i, Variant::Map(VariantMap::new(o)))),
             codec::FORMATCODE_MAP32 => HashMap::<Variant, Variant>::decode_with_format(input, fmt).map(|(i, o)| (i, Variant::Map(VariantMap::new(o)))),
-            // codec::FORMATCODE_ARRAY8 => x::decode_with_format(input, fmt).map(|(i, o)| (i, Variant::Array(o))),
-            // codec::FORMATCODE_ARRAY32 => x::decode_with_format(input, fmt).map(|(i, o)| (i, Variant::Array(o))),
+            // codec::FORMATCODE_ARRAY8 => Vec::<Variant>::decode_with_format(input, fmt).map(|(i, o)| (i, Variant::Array(o))),
+            // codec::FORMATCODE_ARRAY32 => Vec::<Variant>::decode_with_format(input, fmt).map(|(i, o)| (i, Variant::Array(o))),
+            codec::FORMATCODE_DESCRIBED => {
+                let (input, descriptor) = Descriptor::decode(input)?;
+                let (input, value) = Variant::decode(input)?;
+                Ok((input, Variant::Described((descriptor, Box::new(value)))))
+            },
             _ => Err(ErrorKind::InvalidFormatCode(fmt).into())
         }
     }
@@ -394,6 +386,14 @@ fn decode_frame_header(input: &[u8], expected_frame_type: u8) -> Result<(&[u8], 
     decode_check_len!(input, ext_header_len + 4);
     let input = &input[ext_header_len + 4..]; // skipping remaining two header bytes and ext header
     Ok((input, channel_id))
+}
+
+fn decode_array_header(input: &[u8], fmt: u8) -> Result<(&[u8], CompoundHeader)> {
+    match fmt {
+        codec::FORMATCODE_ARRAY8 => decode_compound8(input),
+        codec::FORMATCODE_ARRAY32 => decode_compound32(input),
+        _ => Err(ErrorKind::InvalidFormatCode(fmt).into()),
+    }
 }
 
 pub(crate) fn decode_list_header(input: &[u8], fmt: u8) -> Result<(&[u8], CompoundHeader)> {

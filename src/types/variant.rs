@@ -1,6 +1,6 @@
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
-use types::{ByteStr, Symbol};
+use types::{ByteStr, List, Symbol, Descriptor};
 use uuid::Uuid;
 use ordered_float::OrderedFloat;
 use std::collections::HashMap;
@@ -69,8 +69,14 @@ pub enum Variant {
     /// Symbolic values from a constrained domain.
     Symbol(Symbol),
 
+    /// List
+    List(List),
+
     /// Map
-    Map(VariantMap)
+    Map(VariantMap),
+
+    /// Described value
+    Described((Descriptor, Box<Variant>)),
 }
 
 #[derive(PartialEq, Eq, Clone, Debug)]

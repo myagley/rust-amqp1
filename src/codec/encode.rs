@@ -4,7 +4,7 @@ use bytes::{BigEndian, BufMut, Bytes, BytesMut};
 use chrono::{DateTime, Utc};
 use codec::{self, ArrayEncode, Encode};
 use framing::{self, AmqpFrame, SaslFrame};
-use types::{ByteStr, Descriptor, Symbol, Multiple, Variant};
+use types::{ByteStr, Descriptor, List, Multiple, Symbol, Variant};
 use uuid::Uuid;
 use std::collections::HashMap;
 use std::hash::Hash;
@@ -475,11 +475,11 @@ impl<T: ArrayEncode> Encode for Vec<T> {
         let size = array_encoded_size(self);
         if size + 2 > u8::MAX as usize {
             buf.put_u8(codec::FORMATCODE_ARRAY32);
-            buf.put_u32::<BigEndian>((size + 5) as u32); // +5 for 4 byte and 1 byte item ctor that follow
+            buf.put_u32::<BigEndian>((size + 5) as u32); // +5 for 4 byte count and 1 byte item ctor that follow
             buf.put_u32::<BigEndian>(self.len() as u32);
         } else {
             buf.put_u8(codec::FORMATCODE_ARRAY8);
-            buf.put_u8((size + 2) as u8); // +2 for 1 byte and 1 byte item ctor that follow
+            buf.put_u8((size + 2) as u8); // +2 for 1 byte count and 1 byte item ctor that follow
             buf.put_u8(self.len() as u8);
         }
         for i in self {
@@ -490,8 +490,9 @@ impl<T: ArrayEncode> Encode for Vec<T> {
 
 impl<T: Encode + ArrayEncode> Encode for Multiple<T> {
     fn encoded_size(&self) -> usize {
-        let count = self.0.len();
-        if count == 1 { // special case: single item is encoded without array encoding
+        let count = self.len();
+        if count == 1 {
+            // special case: single item is encoded without array encoding
             self.0[0].encoded_size()
         } else {
             self.0.encoded_size()
@@ -500,11 +501,39 @@ impl<T: Encode + ArrayEncode> Encode for Multiple<T> {
 
     fn encode(&self, buf: &mut BytesMut) {
         let count = self.0.len();
-        if count == 1 { // special case: single item is encoded without array encoding
+        if count == 1 {
+            // special case: single item is encoded without array encoding
             self.0[0].encode(buf)
-        }
-        else {
+        } else {
             self.0.encode(buf)
+        }
+    }
+}
+
+fn list_encoded_size(vec: &List) -> usize {
+    vec.iter().fold(0, |r, i| r + i.encoded_size())
+}
+
+impl Encode for List {
+    fn encoded_size(&self) -> usize {
+        let content_size = list_encoded_size(self);
+        // format_code + size + count
+        (if content_size + 1 > u8::MAX as usize { 9 } else { 3 }) + content_size
+    }
+
+    fn encode(&self, buf: &mut BytesMut) {
+        let size = list_encoded_size(self);
+        if size + 1 > u8::MAX as usize {
+            buf.put_u8(codec::FORMATCODE_ARRAY32);
+            buf.put_u32::<BigEndian>((size + 4) as u32); // +4 for 4 byte count that follow
+            buf.put_u32::<BigEndian>(self.len() as u32);
+        } else {
+            buf.put_u8(codec::FORMATCODE_ARRAY8);
+            buf.put_u8((size + 1) as u8); // +1 for 1 byte count that follow
+            buf.put_u8(self.len() as u8);
+        }
+        for i in self.iter() {
+            i.encode(buf);
         }
     }
 }
@@ -530,7 +559,9 @@ impl Encode for Variant {
             Variant::Binary(ref b) => b.encoded_size(),
             Variant::String(ref s) => s.encoded_size(),
             Variant::Symbol(ref s) => s.encoded_size(),
+            Variant::List(ref l) => l.encoded_size(),
             Variant::Map(ref m) => m.map.encoded_size(),
+            Variant::Described(ref dv) => dv.0.encoded_size() + dv.1.encoded_size(),
         }
     }
 
@@ -555,7 +586,12 @@ impl Encode for Variant {
             Variant::Binary(ref b) => b.encode(buf),
             Variant::String(ref s) => s.encode(buf),
             Variant::Symbol(ref s) => s.encode(buf),
+            Variant::List(ref l) => l.encode(buf),
             Variant::Map(ref m) => m.map.encode(buf),
+            Variant::Described(ref dv) => {
+                dv.0.encode(buf);
+                dv.1.encode(buf);
+            }
         }
     }
 }

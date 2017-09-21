@@ -21,6 +21,8 @@ lazy_static  = "0.2"
 
 [dev-dependencies]
 tokio-core = "0.1"
+native-tls = "0.1"
+tokio-tls = "0.1"
 hex-slice = { git = 'https://github.com/g2p/hex-slice', branch = 'flags' }
 
 [features]

@@ -64,8 +64,6 @@ pub type IetfLanguageTags = Multiple<IetfLanguageTag>;
 mod definitions;
 pub use self::definitions::*;
 
-//include!(concat!(env!("OUT_DIR"), "/definitions.rs"));
-
 #[derive(Debug, Hash, Eq, PartialEq, Clone)]
 pub enum AnnotationKey {
     Ulong(u64),
